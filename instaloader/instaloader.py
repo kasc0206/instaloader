@@ -1541,13 +1541,26 @@ class Instaloader:
                         # pylint:disable=cell-var-from-loop
                         last_scraped = latest_stamps.get_last_post_timestamp(profile_name)
                         posts_takewhile = lambda p: p.date_local > last_scraped
-                    posts_to_download = profile.get_posts()
+                    # 优先使用 Feed API（graphql/query 已被 Instagram 限制）
+                    first_post = None
+                    try:
+                        posts_iter = profile.get_posts_via_feed_api()
+                        # 包装迭代器以记录第一个帖子
+                        def _feed_posts_wrapper(iter_inner=posts_iter):
+                            nonlocal first_post
+                            for p in iter_inner:
+                                if first_post is None:
+                                    first_post = p
+                                yield p
+                        posts_to_download = _feed_posts_wrapper()
+                    except Exception:
+                        self.context.log("Feed API failed, falling back to GraphQL.")
+                        posts_to_download = profile.get_posts()
                     self.posts_download_loop(posts_to_download, profile_name, fast_update, post_filter,
                                              total_count=profile.mediacount, owner_profile=profile,
                                              takewhile=posts_takewhile, possibly_pinned=3, max_count=max_count)
-                    if latest_stamps is not None and posts_to_download.first_item is not None:
-                        latest_stamps.set_last_post_timestamp(profile_name,
-                                                              posts_to_download.first_item.date_local)
+                    if latest_stamps is not None and first_post is not None:
+                        latest_stamps.set_last_post_timestamp(profile_name, first_post.date_local)
 
         if stories and profiles:
             with self.context.error_catcher("Download stories"):
@@ -1626,7 +1639,13 @@ class Instaloader:
 
         # Iterate over pictures and download them
         self.context.log("Retrieving posts from profile {}.".format(profile_name))
-        self.posts_download_loop(profile.get_posts(), profile_name, fast_update, post_filter,
+        # 优先使用 Feed API（graphql/query 已被 Instagram 限制）
+        try:
+            posts_to_download = profile.get_posts_via_feed_api()
+        except Exception:
+            self.context.log("Feed API failed, falling back to GraphQL.")
+            posts_to_download = profile.get_posts()
+        self.posts_download_loop(posts_to_download, profile_name, fast_update, post_filter,
                                  total_count=profile.mediacount, owner_profile=profile)
 
     def interactive_login(self, username: str) -> None:
