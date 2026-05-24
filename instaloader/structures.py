@@ -162,6 +162,101 @@ def _optional_normalize(string: Optional[str]) -> Optional[str]:
         return None
 
 
+def _convert_api_item_to_graphql(item: dict) -> dict:
+    """
+    将 Instagram Web API（Feed API / Media Info API）返回的数据项
+    转换为 Instaloader 兼容的 GraphQL 节点格式。
+
+    media_type: 1=图片, 2=视频, 8=多图(carousel)
+    """
+    media_type_map = {1: "GraphImage", 2: "GraphVideo", 8: "GraphSidecar"}
+    typename = media_type_map.get(item.get("media_type", 1), "GraphImage")
+
+    # 基础字段
+    node = {
+        "__typename": typename,
+        "id": str(item.get("pk", "")),
+        "shortcode": item.get("code", ""),
+        "taken_at_timestamp": item.get("taken_at", 0),
+        "display_url": "",
+        "edge_media_to_caption": {
+            "edges": []
+        },
+        "edge_media_to_comment": {
+            "count": item.get("comment_count", 0)
+        },
+        "edge_liked_by": {
+            "count": item.get("like_count", 0)
+        },
+        "edge_sidecar_to_children": {
+            "edges": []
+        },
+        "owner": {
+            "id": str(item.get("user", {}).get("pk", "")),
+            "username": item.get("user", {}).get("username", ""),
+        },
+        "is_video": item.get("media_type", 1) == 2,
+        "video_url": None,
+    }
+
+    # 图片 URL（display_resources 格式）
+    candidates = item.get("image_versions2", {}).get("candidates", [])
+    if candidates:
+        node["display_url"] = candidates[0].get("url", "")
+        node["display_resources"] = [
+            {"src": c.get("url", ""), "config_width": c.get("width", 0), "config_height": c.get("height", 0)}
+            for c in candidates
+        ]
+
+    # 视频 URL
+    video_versions = item.get("video_versions", [])
+    if video_versions:
+        node["video_url"] = video_versions[0].get("url", "")
+        node["video_duration"] = item.get("video_duration", 0.0)
+        node["has_audio"] = item.get("has_audio", False)
+        node["video_view_count"] = item.get("play_count", 0)
+
+    # 标题（caption）
+    caption = item.get("caption")
+    if caption:
+        node["edge_media_to_caption"]["edges"] = [
+            {"node": {"text": caption.get("text", "")}}
+        ]
+
+    # 位置信息
+    location = item.get("location")
+    if location:
+        node["location"] = {
+            "id": str(location.get("pk", "")),
+            "name": location.get("name", ""),
+            "slug": location.get("slug", ""),
+            "lat": location.get("lat"),
+            "lng": location.get("lng"),
+        }
+
+    # 多图（carousel）子项
+    carousel_media = item.get("carousel_media", [])
+    if carousel_media:
+        child_type_map = {1: "GraphImage", 2: "GraphVideo"}
+        for child in carousel_media:
+            child_type = child_type_map.get(child.get("media_type", 1), "GraphImage")
+            child_candidates = child.get("image_versions2", {}).get("candidates", [])
+            child_video = child.get("video_versions", [])
+            child_node = {
+                "node": {
+                    "__typename": child_type,
+                    "id": str(child.get("pk", "")),
+                    "shortcode": item.get("code", ""),
+                    "display_url": child_candidates[0]["url"] if child_candidates else "",
+                    "is_video": child.get("media_type", 1) == 2,
+                    "video_url": child_video[0]["url"] if child_video else None,
+                }
+            }
+            node["edge_sidecar_to_children"]["edges"].append(child_node)
+
+    return node
+
+
 class Post:
     """
     Structure containing information about an Instagram post.
@@ -413,21 +508,62 @@ class Post:
 
     def _obtain_metadata(self):
         if not self._full_metadata_dict:
-            resp = self._context.doc_id_graphql_query(
-                "27128499623469141",
-                {
-                    "shortcode": self.shortcode,
-                    "__relay_internal__pv__PolarisAIGMMediaWebLabelEnabledrelayprovider": False,
-                },
-            )
-            web_info = (resp.get("data") or {}).get("xdt_api__v1__media__shortcode__web_info") or {}
-            items = web_info.get("items")
-            if not items:
-                raise BadResponseException("Fetching Post metadata failed.")
-            self._full_metadata_dict = Post._normalize_post_data(items[0], self._context)
+            # 优先尝试通过 Web API 获取元数据（graphql/query 常被 Instagram 限制）
+            try:
+                self._obtain_metadata_via_web_api()
+            except Exception:
+                # 回退到上游新版 GraphQL 查询（doc_id 27128499623469141）
+                resp = self._context.doc_id_graphql_query(
+                    "27128499623469141",
+                    {
+                        "shortcode": self.shortcode,
+                        "__relay_internal__pv__PolarisAIGMMediaWebLabelEnabledrelayprovider": False,
+                    },
+                )
+                web_info = (resp.get("data") or {}).get("xdt_api__v1__media__shortcode__web_info") or {}
+                items = web_info.get("items")
+                if not items:
+                    raise BadResponseException("Fetching Post metadata failed.")
+                self._full_metadata_dict = Post._normalize_post_data(items[0], self._context)
             if self.shortcode != self._full_metadata_dict['shortcode']:
                 self._node.update(self._full_metadata_dict)
                 raise PostChangedException
+
+    def _obtain_metadata_via_web_api(self):
+        """通过 Instagram Web API 获取帖子元数据（替代被限制的 graphql/query）"""
+        import requests
+        session = self._context._session
+
+        cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+        csrf = cookies_dict.get("csrftoken", "")
+        if not csrf:
+            session.get("https://www.instagram.com/")
+            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+            csrf = cookies_dict.get("csrftoken", "")
+
+        headers = {
+            "X-CSRFToken": csrf,
+            "X-IG-App-ID": "936619743392459",
+            "Referer": "https://www.instagram.com/",
+        }
+
+        resp = session.get(
+            "https://www.instagram.com/api/v1/media/{}/info/".format(self.mediaid),
+            headers=headers,
+        )
+
+        if resp.status_code != 200:
+            raise ConnectionException(
+                f"Failed to fetch media info: {resp.status_code} {resp.reason}"
+            )
+
+        items = resp.json().get("items", [])
+        if not items:
+            raise BadResponseException("Fetching Post metadata failed: empty response.")
+
+        item = items[0]
+        pic_json = _convert_api_item_to_graphql(item)
+        self._full_metadata_dict = pic_json
 
     @property
     def _full_metadata(self) -> Dict[str, Any]:
@@ -1422,6 +1558,91 @@ class Profile:
             {'id': self.userid},
             'https://www.instagram.com/{0}/'.format(self.username),
         )
+
+    def get_posts_via_feed_api(self) -> Iterator[Post]:
+        """通过 Instagram Feed API 获取用户所有帖子。
+        替代被限制的 graphql/query 方式。需要登录。
+
+        :rtype: Iterator[Post]
+        """
+        import requests
+        import time
+
+        session = self._context._session
+        user_id = self.userid
+
+        if not self._context.is_logged_in:
+            self._context.log("Feed API requires login, falling back to GraphQL.")
+            raise LoginRequiredException("Feed API requires login.")
+
+        # 确保有正确的请求头
+        if "X-IG-App-ID" not in session.headers:
+            session.headers["X-IG-App-ID"] = "936619743392459"
+
+        # 获取 CSRF token
+        cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+        csrf = cookies_dict.get("csrftoken", "")
+        if not csrf:
+            session.get("https://www.instagram.com/")
+            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+            csrf = cookies_dict.get("csrftoken", "")
+
+        headers = {
+            "X-CSRFToken": csrf,
+            "X-IG-App-ID": "936619743392459",
+            "Referer": f"https://www.instagram.com/{self.username}/",
+        }
+
+        max_id = None
+        fetched_count = 0
+        retries = 0
+
+        while True:
+            params = {"count": 50}
+            if max_id:
+                params["max_id"] = max_id
+
+            resp = session.get(
+                f"https://www.instagram.com/api/v1/feed/user/{user_id}/",
+                params=params,
+                headers=headers,
+            )
+
+            if resp.status_code == 429:
+                retries += 1
+                if retries > 3:
+                    self._context.error("Rate limited too many times, stopping.")
+                    break
+                wait = 30 * retries
+                self._context.error(f"Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code == 401:
+                self._context.error("Session expired, Feed API returned 401.")
+                break
+            if resp.status_code != 200:
+                self._context.error(f"Failed to fetch feed: {resp.status_code}")
+                break
+
+            retries = 0
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                node = _convert_api_item_to_graphql(item)
+                post = Post(self._context, node, self)
+                post._full_metadata_dict = node  # 预填充元数据
+                yield post
+                fetched_count += 1
+
+            # 分页
+            if not data.get("more_available", False):
+                break
+            max_id = data.get("next_max_id")
+
+        self._context.log(f"\n✅ 通过 Feed API 获取到 {fetched_count} 个帖子")
 
     def get_tagged_posts(self) -> NodeIterator[Post]:
         """Retrieve all posts where a profile is tagged.
