@@ -12,7 +12,7 @@ except ImportError:
 else:
     win_unicode_console.enable()
 
-from .exceptions import *
+from .exceptions import *  # noqa: F401, F403
 from .instaloader import Instaloader as Instaloader
 from .instaloadercontext import (InstaloaderContext as InstaloaderContext,
                                  RateController as RateController)
