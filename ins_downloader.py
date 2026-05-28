@@ -14,6 +14,9 @@ Instagram 下载工具 - Fork of Instaloader
 
   # 仅下载公开内容（无需登录，但部分功能受限）
   python ins_downloader.py --url public_profile
+
+  # 更新所有已下载的用户（快速增量更新）
+  python ins_downloader.py --load-cookies edge --update-all
 """
 
 import os
@@ -237,6 +240,7 @@ def main():
   %(prog)s --login my_account --url natgeo selenagomez --stories --highlights --reels
   %(prog)s --login my_account --file urls.txt --all --avatar  (下载所有内容)
   %(prog)s --url public_profile  (无需登录，仅下载公开内容)
+  %(prog)s --load-cookies edge --update-all  (更新所有已下载用户)
         """,
     )
 
@@ -272,42 +276,67 @@ def main():
                                 help="下载所有内容（头像+帖子+Stories+Highlights+Tagged+Reels+IGTV）")
     download_group.add_argument("--fast", action="store_true", dest="fast_update",
                                 help="快速模式，只下载新内容")
-    download_group.add_argument("--output", "-o", default=".",
-                                help="输出目录（默认当前目录）")
+    download_group.add_argument("--output", "-o", default="download_test",
+                                help="输出目录（默认 download_test 目录）")
+    download_group.add_argument("--update-all", action="store_true",
+                                help="更新所有已下载的用户（扫描输出目录，自动快速度更新）")
     download_group.add_argument("--quiet", "-q", action="store_true",
                                 help="静默模式")
 
     args = parser.parse_args()
 
+    output_dir = Path(args.output).resolve()
+
     # 收集目标用户名
     usernames = []
-    if args.urls:
-        for url in args.urls:
-            try:
-                usernames.append(parse_instagram_url(url))
-            except ValueError as e:
-                print(f"⚠️ 跳过: {e}")
-    if args.url_file:
-        try:
-            for url in read_urls_from_file(args.url_file):
+
+    # --update-all 模式：扫描输出目录中已有的用户
+    if args.update_all:
+        if output_dir.is_dir():
+            for entry in sorted(output_dir.iterdir()):
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    usernames.append(entry.name)
+            if usernames:
+                print(f"🔄 更新模式：扫描到 {len(usernames)} 个已下载的用户")
+            else:
+                print(f"❌ 输出目录 '{output_dir}' 中未找到已下载的用户")
+                sys.exit(1)
+        else:
+            print(f"❌ 输出目录 '{output_dir}' 不存在")
+            sys.exit(1)
+        # 更新模式默认使用快速模式
+        args.fast_update = True
+        # 更新模式默认下载所有内容类型
+        args.download_all = True
+        args.avatar = True
+    else:
+        if args.urls:
+            for url in args.urls:
                 try:
                     usernames.append(parse_instagram_url(url))
                 except ValueError as e:
                     print(f"⚠️ 跳过: {e}")
-        except FileNotFoundError:
-            print(f"❌ 文件不存在: {args.url_file}")
+        if args.url_file:
+            try:
+                for url in read_urls_from_file(args.url_file):
+                    try:
+                        usernames.append(parse_instagram_url(url))
+                    except ValueError as e:
+                        print(f"⚠️ 跳过: {e}")
+            except FileNotFoundError:
+                print(f"❌ 文件不存在: {args.url_file}")
+                sys.exit(1)
+
+        if not usernames:
+            print("❌ 未指定目标用户。使用 --url、--file 或 --update-all。")
+            parser.print_help()
             sys.exit(1)
 
-    if not usernames:
-        print("❌ 未指定目标用户。使用 --url 或 --file。")
-        parser.print_help()
-        sys.exit(1)
-
-    seen = set()
-    usernames = [u for u in usernames if not (u in seen or seen.add(u))]
-    print(f"🎯 共 {len(usernames)} 个目标用户:")
-    for u in usernames:
-        print(f"   - {u}")
+        seen = set()
+        usernames = [u for u in usernames if not (u in seen or seen.add(u))]
+        print(f"🎯 共 {len(usernames)} 个目标用户:")
+        for u in usernames:
+            print(f"   - {u}")
 
     # 初始化 Instaloader
     output_dir = Path(args.output).resolve()

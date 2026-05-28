@@ -1270,18 +1270,32 @@ class Instaloader:
         .. versionchanged:: 4.8
            Add `latest_stamps` parameter."""
         self.context.log("Retrieving tagged posts for profile {}.".format(profile.username))
-        posts_takewhile: Optional[Callable[[Post], bool]] = None
-        if latest_stamps is not None:
-            last_scraped = latest_stamps.get_last_tagged_timestamp(profile.username)
-            posts_takewhile = lambda p: p.date_local > last_scraped
-        tagged_posts = profile.get_tagged_posts()
-        self.posts_download_loop(tagged_posts,
-                                 target if target
-                                 else (Path(_PostPathFormatter.sanitize_path(profile.username, self.sanitize_paths)) /
-                                       _PostPathFormatter.sanitize_path(':tagged', self.sanitize_paths)),
-                                 fast_update, post_filter, takewhile=posts_takewhile)
-        if latest_stamps is not None and tagged_posts.first_item is not None:
-            latest_stamps.set_last_tagged_timestamp(profile.username, tagged_posts.first_item.date_local)
+        try:
+            # 优先使用 Web API (替代被限制的 graphql/query)
+            tagged_posts = list(profile.get_tagged_posts_via_api())
+            if latest_stamps is not None and tagged_posts:
+                tagged_posts = [p for p in tagged_posts if p.date_local > latest_stamps.get_last_tagged_timestamp(profile.username)]
+            self.posts_download_loop(iter(tagged_posts),
+                                     target if target
+                                     else (Path(_PostPathFormatter.sanitize_path(profile.username, self.sanitize_paths)) /
+                                           _PostPathFormatter.sanitize_path(':tagged', self.sanitize_paths)),
+                                     fast_update, post_filter)
+            if latest_stamps is not None and tagged_posts:
+                latest_stamps.set_last_tagged_timestamp(profile.username, tagged_posts[0].date_local)
+        except Exception as err:
+            self.context.error(f"Tagged Web API failed ({err}), falling back to GraphQL.")
+            posts_takewhile: Optional[Callable[[Post], bool]] = None
+            if latest_stamps is not None:
+                last_scraped = latest_stamps.get_last_tagged_timestamp(profile.username)
+                posts_takewhile = lambda p: p.date_local > last_scraped
+            tagged_posts = profile.get_tagged_posts()
+            self.posts_download_loop(tagged_posts,
+                                     target if target
+                                     else (Path(_PostPathFormatter.sanitize_path(profile.username, self.sanitize_paths)) /
+                                           _PostPathFormatter.sanitize_path(':tagged', self.sanitize_paths)),
+                                     fast_update, post_filter, takewhile=posts_takewhile)
+            if latest_stamps is not None and tagged_posts.first_item is not None:
+                latest_stamps.set_last_tagged_timestamp(profile.username, tagged_posts.first_item.date_local)
 
     def download_reels(self, profile: Profile, fast_update: bool = False,
                       post_filter: Optional[Callable[[Post], bool]] = None,
@@ -1292,22 +1306,39 @@ class Instaloader:
 
         """
         self.context.log("Retrieving reels videos for profile {}.".format(profile.username))
-        posts_takewhile: Optional[Callable[[Post], bool]] = None
-        if latest_stamps is not None:
-            last_scraped = latest_stamps.get_last_reels_timestamp(profile.username)
-            posts_takewhile = lambda p: p.date_local > last_scraped
-        reels = profile.get_reels()
-        self.posts_download_loop(
-            reels,
-            profile.username,
-            fast_update,
-            post_filter,
-            owner_profile=profile,
-            takewhile=posts_takewhile,
-            possibly_pinned=3,
-        )
-        if latest_stamps is not None and reels.first_item is not None:
-            latest_stamps.set_last_reels_timestamp(profile.username, reels.first_item.date_local)
+        try:
+            # 优先使用 Web API (替代被限制的 graphql/query)
+            reels = list(profile.get_reels_via_api())
+            if latest_stamps is not None and reels:
+                reels = [p for p in reels if p.date_local > latest_stamps.get_last_reels_timestamp(profile.username)]
+            self.posts_download_loop(
+                iter(reels),
+                profile.username,
+                fast_update,
+                post_filter,
+                owner_profile=profile,
+                possibly_pinned=3,
+            )
+            if latest_stamps is not None and reels:
+                latest_stamps.set_last_reels_timestamp(profile.username, reels[0].date_local)
+        except Exception as err:
+            self.context.error(f"Reels Web API failed ({err}), falling back to GraphQL.")
+            posts_takewhile: Optional[Callable[[Post], bool]] = None
+            if latest_stamps is not None:
+                last_scraped = latest_stamps.get_last_reels_timestamp(profile.username)
+                posts_takewhile = lambda p: p.date_local > last_scraped
+            reels = profile.get_reels()
+            self.posts_download_loop(
+                reels,
+                profile.username,
+                fast_update,
+                post_filter,
+                owner_profile=profile,
+                takewhile=posts_takewhile,
+                possibly_pinned=3,
+            )
+            if latest_stamps is not None and reels.first_item is not None:
+                latest_stamps.set_last_reels_timestamp(profile.username, reels.first_item.date_local)
 
     def download_igtv(self, profile: Profile, fast_update: bool = False,
                       post_filter: Optional[Callable[[Post], bool]] = None,
@@ -1319,15 +1350,26 @@ class Instaloader:
         .. versionchanged:: 4.8
            Add `latest_stamps` parameter."""
         self.context.log("Retrieving IGTV videos for profile {}.".format(profile.username))
-        posts_takewhile: Optional[Callable[[Post], bool]] = None
-        if latest_stamps is not None:
-            last_scraped = latest_stamps.get_last_igtv_timestamp(profile.username)
-            posts_takewhile = lambda p: p.date_local > last_scraped
-        igtv_posts = profile.get_igtv_posts()
-        self.posts_download_loop(igtv_posts, profile.username, fast_update, post_filter,
-                                 total_count=profile.igtvcount, owner_profile=profile, takewhile=posts_takewhile)
-        if latest_stamps is not None and igtv_posts.first_item is not None:
-            latest_stamps.set_last_igtv_timestamp(profile.username, igtv_posts.first_item.date_local)
+        try:
+            # 优先使用 Web API (替代被限制的 graphql/query)
+            igtv_posts = list(profile.get_igtv_posts_via_api())
+            if latest_stamps is not None and igtv_posts:
+                igtv_posts = [p for p in igtv_posts if p.date_local > latest_stamps.get_last_igtv_timestamp(profile.username)]
+            self.posts_download_loop(iter(igtv_posts), profile.username, fast_update, post_filter,
+                                     owner_profile=profile)
+            if latest_stamps is not None and igtv_posts:
+                latest_stamps.set_last_igtv_timestamp(profile.username, igtv_posts[0].date_local)
+        except Exception as err:
+            self.context.error(f"IGTV Web API failed ({err}), falling back to GraphQL.")
+            posts_takewhile: Optional[Callable[[Post], bool]] = None
+            if latest_stamps is not None:
+                last_scraped = latest_stamps.get_last_igtv_timestamp(profile.username)
+                posts_takewhile = lambda p: p.date_local > last_scraped
+            igtv_posts = profile.get_igtv_posts()
+            self.posts_download_loop(igtv_posts, profile.username, fast_update, post_filter,
+                                     total_count=profile.igtvcount, owner_profile=profile, takewhile=posts_takewhile)
+            if latest_stamps is not None and igtv_posts.first_item is not None:
+                latest_stamps.set_last_igtv_timestamp(profile.username, igtv_posts.first_item.date_local)
 
     def _get_id_filename(self, profile_name: str) -> str:
         if ((format_string_contains_key(self.dirname_pattern, 'profile') or
