@@ -1644,6 +1644,237 @@ class Profile:
 
         self._context.log(f"\n✅ 通过 Feed API 获取到 {fetched_count} 个帖子")
 
+    def get_tagged_posts_via_api(self) -> Iterator[Post]:
+        """通过 Instagram Web API 获取标记用户的帖子。
+        替代被限制的 graphql/query 方式。需要登录。
+
+        :rtype: Iterator[Post]
+        """
+        import requests
+        import time
+
+        session = self._context._session
+        user_id = self.userid
+
+        if not self._context.is_logged_in:
+            raise LoginRequiredException("Tagged API requires login.")
+
+        cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+        csrf = cookies_dict.get("csrftoken", "")
+        if not csrf:
+            session.get("https://www.instagram.com/")
+            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+            csrf = cookies_dict.get("csrftoken", "")
+
+        headers = {
+            "X-CSRFToken": csrf,
+            "X-IG-App-ID": "936619743392459",
+            "Referer": f"https://www.instagram.com/{self.username}/",
+        }
+
+        max_id = None
+        fetched_count = 0
+        retries = 0
+
+        while True:
+            params = {"count": 50}
+            if max_id:
+                params["max_id"] = max_id
+
+            resp = session.get(
+                f"https://www.instagram.com/api/v1/usertags/{user_id}/feed/",
+                params=params,
+                headers=headers,
+            )
+
+            if resp.status_code == 429:
+                retries += 1
+                if retries > 3:
+                    self._context.error("Rate limited too many times, stopping.")
+                    break
+                wait = 30 * retries
+                self._context.error(f"Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                self._context.error(f"Failed to fetch tagged feed: {resp.status_code}")
+                break
+
+            retries = 0
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                node = _convert_api_item_to_graphql(item)
+                post = Post(self._context, node, self)
+                post._full_metadata_dict = node
+                yield post
+                fetched_count += 1
+
+            if not data.get("more_available", False):
+                break
+            max_id = data.get("next_max_id")
+
+        self._context.log(f"\n✅ 通过 Tagged API 获取到 {fetched_count} 个标记帖子")
+
+    def get_reels_via_api(self) -> Iterator[Post]:
+        """通过 Instagram Web API 获取 Reels 短视频。
+        替代被限制的 graphql/query 方式。需要登录。
+
+        :rtype: Iterator[Post]
+        """
+        import requests
+        import time
+
+        session = self._context._session
+        user_id = str(self.userid)
+
+        if not self._context.is_logged_in:
+            raise LoginRequiredException("Reels API requires login.")
+
+        cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+        csrf = cookies_dict.get("csrftoken", "")
+        if not csrf:
+            session.get("https://www.instagram.com/")
+            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+            csrf = cookies_dict.get("csrftoken", "")
+
+        headers = {
+            "X-CSRFToken": csrf,
+            "X-IG-App-ID": "936619743392459",
+            "Referer": f"https://www.instagram.com/{self.username}/",
+        }
+
+        max_id = None
+        fetched_count = 0
+        retries = 0
+
+        while True:
+            params = {"page_size": 12, "include_feed_video": True, "target_user_id": user_id}
+            if max_id:
+                params["max_id"] = max_id
+
+            resp = session.post(
+                "https://www.instagram.com/api/v1/clips/user/",
+                data=params,
+                headers=headers,
+            )
+
+            if resp.status_code == 429:
+                retries += 1
+                if retries > 3:
+                    self._context.error("Rate limited too many times, stopping.")
+                    break
+                wait = 30 * retries
+                self._context.error(f"Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                self._context.error(f"Failed to fetch reels: {resp.status_code}")
+                break
+
+            retries = 0
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                media = item.get("media", item)
+                code = media.get("code", "")
+                if code:
+                    try:
+                        post = Post.from_shortcode(self._context, code)
+                        yield post
+                        fetched_count += 1
+                    except Exception as e:
+                        self._context.error(f"Failed to parse reel: {e}")
+
+            paging_info = data.get("paging_info", {})
+            if not paging_info.get("more_available", False):
+                break
+            max_id = paging_info.get("max_id")
+
+        self._context.log(f"\n✅ 通过 Reels API 获取到 {fetched_count} 个短视频")
+
+    def get_igtv_posts_via_api(self) -> Iterator[Post]:
+        """通过 Instagram Web API 获取 IGTV 视频。
+        替代被限制的 graphql/query 方式。需要登录。
+
+        :rtype: Iterator[Post]
+        """
+        import requests
+        import time
+
+        session = self._context._session
+        user_id = self.userid
+
+        if not self._context.is_logged_in:
+            raise LoginRequiredException("IGTV API requires login.")
+
+        cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+        csrf = cookies_dict.get("csrftoken", "")
+        if not csrf:
+            session.get("https://www.instagram.com/")
+            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+            csrf = cookies_dict.get("csrftoken", "")
+
+        headers = {
+            "X-CSRFToken": csrf,
+            "X-IG-App-ID": "936619743392459",
+            "Referer": f"https://www.instagram.com/{self.username}/",
+        }
+
+        max_id = None
+        fetched_count = 0
+        retries = 0
+
+        while True:
+            params = {"count": 12}
+            if max_id:
+                params["max_id"] = max_id
+
+            resp = session.get(
+                f"https://www.instagram.com/api/v1/igtv/feed/user/{user_id}/",
+                params=params,
+                headers=headers,
+            )
+
+            if resp.status_code == 429:
+                retries += 1
+                if retries > 3:
+                    self._context.error("Rate limited too many times, stopping.")
+                    break
+                wait = 30 * retries
+                self._context.error(f"Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                self._context.error(f"Failed to fetch IGTV: {resp.status_code}")
+                break
+
+            retries = 0
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                media = item.get("media", item)
+                node = _convert_api_item_to_graphql(media)
+                post = Post(self._context, node, self)
+                post._full_metadata_dict = node
+                yield post
+                fetched_count += 1
+
+            if not data.get("more_available", False):
+                break
+            max_id = data.get("next_max_id")
+
+        self._context.log(f"\n✅ 通过 IGTV API 获取到 {fetched_count} 个视频")
+
     def get_tagged_posts(self) -> NodeIterator[Post]:
         """Retrieve all posts where a profile is tagged.
 
