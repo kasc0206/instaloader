@@ -127,7 +127,7 @@ def fetch_friendship_via_api(session, user_id, endpoint, max_pages=None,
         data = resp.json()
         items = data.get("users", [])
         if not items:
-            print(f"\n   📭 没有更多数据")
+            print("\n   📭 没有更多数据")
             break
 
         for item in items:
@@ -227,7 +227,7 @@ def main():
 
     if followees:
         s = sorted(followees, key=lambda x: x["follower_count"], reverse=True)
-        print(f"\n📊 TOP 30 关注（按粉丝数）:")
+        print("\n📊 TOP 30 关注（按粉丝数）:")
         print(f"{'#':>3} | {'用户名':<22} | {'粉丝':>10} | {'关注':>8} | {'帖子':>6} | {'私密':>4} | {'认证':>4}")
         print("-" * 65)
         for i, f in enumerate(s[:30]):
@@ -238,7 +238,7 @@ def main():
         avg_f = sum(f["follower_count"] for f in followees) / len(followees)
         print(f"\n📊 关注统计: 私密{pv}({pv/len(followees)*100:.1f}%) | 认证{vf}({vf/len(followees)*100:.1f}%) | 平均粉丝{avg_f:,.0f}")
 
-        print(f"\n📊 粉丝数分布:")
+        print("\n📊 粉丝数分布:")
         for lo, hi, lb in [(0,100,"<100"),(100,1000,"100~1k"),(1000,10000,"1k~1万"),(10000,100000,"1万~10万"),(100000,1000000,"10万~100万"),(1000000,999999999,">100万")]:
             c = sum(1 for f in followees if lo <= f["follower_count"] < hi)
             if c:
@@ -251,7 +251,7 @@ def main():
 
     if followers:
         s = sorted(followers, key=lambda x: x["follower_count"], reverse=True)
-        print(f"\n📊 TOP 30 粉丝（按粉丝数）:")
+        print("\n📊 TOP 30 粉丝（按粉丝数）:")
         print(f"{'#':>3} | {'用户名':<22} | {'粉丝':>10} | {'关注':>8} | {'帖子':>6} | {'私密':>4} | {'认证':>4}")
         print("-" * 65)
         for i, f in enumerate(s[:30]):
@@ -262,7 +262,7 @@ def main():
         avg_f = sum(f["follower_count"] for f in followers) / len(followers)
         print(f"\n📊 粉丝统计: 私密{pv}({pv/len(followers)*100:.1f}%) | 认证{vf}({vf/len(followers)*100:.1f}%) | 平均粉丝{avg_f:,.0f}")
 
-        print(f"\n📊 粉丝分类:")
+        print("\n📊 粉丝分类:")
         big = [f for f in followers if f["follower_count"] >= 100000]
         mid = [f for f in followers if 1000 <= f["follower_count"] < 100000]
         sml = [f for f in followers if f["follower_count"] < 1000]
