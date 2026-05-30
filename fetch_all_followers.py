@@ -37,12 +37,22 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def load_state():
     """加载断点状态"""
+    state = {"max_id": None, "count": 0, "page": 0, "users": []}
+    # 尝试从数据文件加载已获取的用户
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, encoding="utf-8") as f:
+            state["users"] = json.load(f)
+        state["count"] = len(state["users"])
+    # 从状态文件加载 cursor
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
-            state = json.load(f)
-        print(f"📂 找到断点: 已获取 {state.get('count', 0)} 个, 进度 {state.get('progress_pct', 0):.2f}%")
-        return state
-    return {"max_id": None, "count": 0, "page": 0, "users": []}
+            meta = json.load(f)
+        state["max_id"] = meta.get("max_id")
+        state["page"] = meta.get("page", 0)
+        print(f"📂 找到断点: 已获取 {state['count']} 个, 进度 {state['count'] / TOTAL_FOLLOWERS * 100:.2f}%")
+    else:
+        print(f"📂 无断点，从头开始")
+    return state
 
 
 def save_state(state):
