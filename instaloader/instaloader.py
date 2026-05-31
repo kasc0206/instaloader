@@ -1682,11 +1682,19 @@ class Instaloader:
         # Iterate over pictures and download them
         self.context.log("Retrieving posts from profile {}.".format(profile_name))
         # 优先使用 Feed API（graphql/query 已被 Instagram 限制）
+        posts_to_download = None
         try:
             posts_to_download = profile.get_posts_via_feed_api()
-        except Exception:
-            self.context.log("Feed API failed, falling back to GraphQL.")
-            posts_to_download = profile.get_posts()
+        except LoginRequiredException:
+            self.context.log("Feed API requires login, falling back to GraphQL.")
+        except Exception as feed_err:
+            self.context.log(f"Feed API failed ({feed_err}), falling back to GraphQL.")
+        if posts_to_download is None:
+            try:
+                posts_to_download = profile.get_posts()
+            except Exception as graphql_err:
+                self.context.error(f"GraphQL 也失败 ({graphql_err})，跳过帖子下载。")
+                return
         self.posts_download_loop(posts_to_download, profile_name, fast_update, post_filter,
                                  total_count=profile.mediacount, owner_profile=profile)
 

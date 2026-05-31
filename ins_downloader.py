@@ -225,7 +225,16 @@ def download_profile_content(loader: instaloader.Instaloader,
     except instaloader.LoginRequiredException:
         print(f"❌ 需要登录才能访问 '{username}' 的内容")
     except instaloader.ConnectionException as e:
-        print(f"❌ 连接错误: {e}")
+        error_msg = str(e)
+        if "403" in error_msg:
+            print(f"⚠️ 用户 '{username}' API 限制 (403 Forbidden)")
+            print(f"   Instagram 临时限制了对该用户的访问，可稍后重试")
+            print(f"   💡 单独重试: python3 ins_downloader.py --load-cookies edge --url {username} --fast")
+        elif "429" in error_msg:
+            print(f"⏳ 用户 '{username}' 触发频率限制 (429)")
+            print(f"   请等待几分钟后再试")
+        else:
+            print(f"❌ 连接错误: {e}")
     except Exception as e:
         print(f"❌ 下载 '{username}' 时发生未知错误: {e}")
 
@@ -306,8 +315,9 @@ def main():
             sys.exit(1)
         # 更新模式默认使用快速模式
         args.fast_update = True
-        # 更新模式默认下载所有内容类型
-        args.download_all = True
+        # 更新模式只下载头像 + 帖子（跳过 Stories/Highlights/Tagged/Reels/IGTV
+        # 因为这些内容依赖的 graphql/query 接口容易被 Instagram 限制）
+        args.download_all = False
         args.avatar = True
     else:
         if args.urls:
