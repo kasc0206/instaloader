@@ -1046,48 +1046,98 @@ class Profile:
         :raises: :class:`ProfileNotExistsException`
         """
         # 优先使用 Web API 获取用户信息（graphql/query 已被 Instagram 限制）
-        try:
-            return cls._from_username_via_web_api(context, username)
-        except Exception:
-            pass
+        last_error = None
+        for attempt in range(3):
+            try:
+                return cls._from_username_via_web_api(context, username)
+            except ProfileNotExistsException:
+                raise
+            except Exception as err:
+                last_error = err
+                if attempt == 0:
+                    # 首次失败，刷新 CSRF token 后重试
+                    try:
+                        context._session.get("https://www.instagram.com/", timeout=15)
+                    except Exception:
+                        pass
+                    continue
+                elif attempt == 1:
+                    # 再次失败，等待 3 秒后最后一次重试
+                    import time
+                    time.sleep(3)
+                    try:
+                        context._session.get("https://www.instagram.com/", timeout=15)
+                    except Exception:
+                        pass
+                    continue
 
-        # 回退到原始方法
-        data = context.doc_id_graphql_query("26347858941511777", {"hasQuery": True, "query": username})["data"]
-        if data:
-            for user in data["xdt_api__v1__fbsearch__non_profiled_serp"]["users"]:
-                if user["username"].lower() == username.lower():
-                    return cls(context, user)
+        # Web API 多次重试均失败，尝试 GraphQL（可能也会失败）
+        context.log(f"Web API 获取用户 '{username}' 失败 ({last_error})，尝试 GraphQL 搜索...")
+        try:
+            data = context.doc_id_graphql_query("26347858941511777", {"hasQuery": True, "query": username})["data"]
+            if data:
+                for user in data["xdt_api__v1__fbsearch__non_profiled_serp"]["users"]:
+                    if user["username"].lower() == username.lower():
+                        return cls(context, user)
+        except Exception as graphql_err:
+            context.log(f"GraphQL 搜索用户 '{username}' 也失败 ({graphql_err})")
 
         raise ProfileNotExistsException("Profile {} does not exist.".format(username))
 
     @classmethod
-    def _from_username_via_web_api(cls, context: InstaloaderContext, username: str):
-        """通过 Instagram Web API 获取用户信息（替代被限制的 graphql/query）"""
+    def _from_username_via_web_api(cls, context: InstaloaderContext, username: str,
+                                   _retried: bool = False):
+        """通过 Instagram Web API 获取用户信息（替代被限制的 graphql/query）
+
+        :param _retried: 内部使用，是否已经重试过
+        """
         import requests
+        import time
         session = context._session
 
         # 确保 session 有 CSRF token
         cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
         csrf = cookies_dict.get("csrftoken", "")
         if not csrf:
-            session.get("https://www.instagram.com/")
-            cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
-            csrf = cookies_dict.get("csrftoken", "")
+            try:
+                session.get("https://www.instagram.com/", timeout=15)
+                cookies_dict = requests.utils.dict_from_cookiejar(session.cookies)
+                csrf = cookies_dict.get("csrftoken", "")
+            except Exception:
+                pass
 
         headers = {
-            "X-CSRFToken": csrf,
+            "X-CSRFToken": csrf or "",
             "X-IG-App-ID": "936619743392459",
             "Referer": "https://www.instagram.com/",
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
         }
 
         resp = session.get(
             "https://www.instagram.com/api/v1/users/web_profile_info/",
             params={"username": username},
             headers=headers,
+            timeout=30,
         )
 
         if resp.status_code == 404:
             raise ProfileNotExistsException(f"Profile {username} does not exist.")
+
+        # 403/429/401：可能是 CSRF 过期或频率限制，刷新后重试一次
+        if resp.status_code in (403, 429, 401) and not _retried:
+            context.log(f"Web API 返回 {resp.status_code}，刷新 CSRF token 后重试...")
+            time.sleep(2)
+            try:
+                session.get("https://www.instagram.com/", timeout=15)
+            except Exception:
+                pass
+            return cls._from_username_via_web_api(context, username, _retried=True)
+
         if resp.status_code != 200:
             raise ConnectionException(
                 f"Failed to fetch profile {username}: {resp.status_code} {resp.reason}"

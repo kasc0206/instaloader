@@ -461,6 +461,8 @@ class InstaloaderContext:
                         # requirements to stop producing more requests
                         raise AbortDownloadException(self._response_error(resp))
                 raise QueryReturnedBadRequestException(self._response_error(resp))
+            if resp.status_code == 403:
+                raise QueryReturnedBadRequestException(self._response_error(resp))
             if resp.status_code == 404:
                 raise QueryReturnedNotFoundException(self._response_error(resp))
             if resp.status_code == 429:
