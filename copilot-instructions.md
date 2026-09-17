@@ -150,7 +150,7 @@
 
 - **默认分支**：`master`
 - **上游**：`origin` = `https://github.com/instaloader/instaloader.git`（**不是**自己的 fork，切勿 push）
-- **当前基线**：已 rebase 到上游 `v4.15.3`（commit `7efc78d`），本地领先 7 个 commit，落后 0
+- **当前基线**：已 rebase 到上游 `v4.15.3`（commit `7efc78d`），落后 0，本地领先若干提交
 - **本地版本号**：`4.15.3+local1`（PEP 440 local version，**不要**再冒充上游版本号如 `4.15.4`）
 - **本地标签**：自己的里程碑标签一律用 `local-` 前缀（如 `local-4.15.2`），
   否则会与上游同名 tag 冲突，导致 `git fetch` 报 `would clobber existing tag`
