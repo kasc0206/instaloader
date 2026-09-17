@@ -1,34 +1,48 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "🔍 kasc0206: 获取关注列表（首次运行）",
-            "type": "shell",
-            "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py",
-            "problemMatcher": [],
-            "detail": "首次运行：获取关注列表 + 尝试获取一批详情"
-        },
-        {
-            "label": "📥 kasc0206: 获取下一批详情（断点续传）",
-            "type": "shell",
-            "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --resume",
-            "problemMatcher": [],
-            "detail": "每次获取 25 个用户的详细信息，从上次中断处继续"
-        },
-        {
-            "label": "📥 kasc0206: 断点续传（跳过登录验证）",
-            "type": "shell",
-            "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --resume --skip-check",
-            "problemMatcher": [],
-            "detail": "触发频率限制时使用，跳过 test_login 直接使用 cookies"
-        },
-        {
-            "label": "🤖 kasc0206: 自动批量获取（每5~8分钟一批）",
-            "type": "shell",
-            "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --auto --skip-check",
-            "isBackground": true,
-            "problemMatcher": [],
-            "detail": "自动循环：每隔 5~8 分钟获取 25 个，直到全部完成，后台运行"
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🔑 导入 Edge Cookies（刷新登录）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 -u import_cookies.py --browser edge",
+      "problemMatcher": [],
+      "detail": "从 Edge 读取 Instagram cookies，校验登录后保存会话到 ~/.config/instaloader/"
+    },
+    {
+      "label": "🔑 导入 Edge Cookies（跳过登录校验）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 -u import_cookies.py --browser edge --skip-check",
+      "problemMatcher": [],
+      "detail": "触发频率限制时使用，仅导入 cookies 不做联网校验"
+    },
+    {
+      "label": "🔍 kasc0206: 获取关注列表（首次运行）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py",
+      "problemMatcher": [],
+      "detail": "首次运行：获取关注列表 + 尝试获取一批详情"
+    },
+    {
+      "label": "📥 kasc0206: 获取下一批详情（断点续传）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --resume",
+      "problemMatcher": [],
+      "detail": "每次获取 25 个用户的详细信息，从上次中断处继续"
+    },
+    {
+      "label": "📥 kasc0206: 断点续传（跳过登录验证）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --resume --skip-check",
+      "problemMatcher": [],
+      "detail": "触发频率限制时使用，跳过 test_login 直接使用 cookies"
+    },
+    {
+      "label": "🤖 kasc0206: 自动批量获取（每5~8分钟一批）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 analyze_kasc0206.py --auto --skip-check",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "自动循环：每隔 5~8 分钟获取 25 个，直到全部完成，后台运行"
+    }
+  ]
 }

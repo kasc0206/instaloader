@@ -8,3 +8,6 @@ download_test/
 *_fetch_state.json
 *_all_followers.json
 *_follower_usernames.txt
+*_followees.txt
+cookies_*.txt
+session-*
