@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-本项目是基于 [Instaloader](https://github.com/instaloader/instaloader) 的修改版（当前版本 v4.15.4），用于 Instagram 数据采集和分析。在原版基础上增加了 Instagram API 403 错误的修复、Web API 支持、以及多个自定义分析脚本。
+本项目是基于 [Instaloader](https://github.com/instaloader/instaloader) 的修改版（当前版本 `4.15.3+local1`，基于上游 v4.15.3），用于 Instagram 数据采集和分析。在原版基础上增加了 Instagram API 403 错误的修复、Web API 支持、以及多个自定义分析脚本。
 
 ## 目录结构
 
@@ -149,9 +149,31 @@
 ## 版本控制与分支策略
 
 - **默认分支**：`master`
-- **标签**：使用 `vX.Y.Z` 格式
-- **本地 ⚠️**：比上游 `origin/master` 领先 5 个 commit，包含 API 403 修复和自定义脚本
-- 不要直接推送本地修改到上游，本地修复要保留在本地分支
+- **上游**：`origin` = `https://github.com/instaloader/instaloader.git`（**不是**自己的 fork，切勿 push）
+- **当前基线**：已 rebase 到上游 `v4.15.3`（commit `7efc78d`），本地领先 7 个 commit，落后 0
+- **本地版本号**：`4.15.3+local1`（PEP 440 local version，**不要**再冒充上游版本号如 `4.15.4`）
+- **本地标签**：自己的里程碑标签一律用 `local-` 前缀（如 `local-4.15.2`），
+  否则会与上游同名 tag 冲突，导致 `git fetch` 报 `would clobber existing tag`
+- **上游标签**：`v4.15` / `v4.15a1` / `v4.15.1` / `v4.15.2` / `v4.15.3` 应与上游保持一致
+- **备份**：升级前留有 `backup-pre-upgrade-20260917` 分支与 `backup-20260917` 标签
+- **与上游同步流程**：
+  1. 先确认本地没有脏标签（见上）
+  2. `git fetch origin --tags --prune`
+  3. `git rebase origin/master`，预期冲突集中在
+     `instaloader/__init__.py`（版本号）、`instaloadercontext.py`、`structures.py`
+  4. 冲突取舍原则：**上游已实现同名能力时采用上游**（上游已自带 `web_profile_info` 方案），
+     仅保留上游没有的本地增强（如 `Post._obtain_metadata` 的 Web API 优先路径）
+
+### 上游已自带的能力（本地勿重复实现）
+
+上游 v4.15.2+ 已自行修复了 GraphQL 限制问题，本地 fork 中重复的实现应优先删除：
+
+- `Profile.from_username` / `Profile.from_id` / `Profile._obtain_metadata`（匿名）
+  —— 上游改用 `api/v1/users/web_profile_info/` 与 `api/v1/users/{id}/info/`
+- `Post._obtain_metadata` —— 上游改用 `doc_id 27128499623469141` + `Post._normalize_post_data`
+- `InstaloaderContext._get_json` —— 上游已内置 CSRF 获取与注入、`x-ig-app-id` header
+- **仍为本地独有**：`Post._obtain_metadata_via_web_api()`（REST `/api/v1/media/{id}/info/` 优先，
+  GraphQL 回退）、`_convert_api_item_to_graphql()`（供 NodeIterator 的 Web API 路径使用）
 
 ## 常见工作流
 
