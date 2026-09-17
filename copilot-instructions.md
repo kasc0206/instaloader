@@ -149,7 +149,8 @@
 ## 版本控制与分支策略
 
 - **默认分支**：`master`
-- **上游**：`origin` = `https://github.com/instaloader/instaloader.git`（**不是**自己的 fork，切勿 push）
+- **origin**：`https://github.com/kasc0206/instaloader.git`（自己的 fork，可自由 push）
+- **upstream**：`https://github.com/instaloader/instaloader.git`（原仓库，**只 fetch，不要 push**）
 - **当前基线**：已 rebase 到上游 `v4.15.3`（commit `7efc78d`），落后 0，本地领先若干提交
 - **本地版本号**：`4.15.3+local1`（PEP 440 local version，**不要**再冒充上游版本号如 `4.15.4`）
 - **本地标签**：自己的里程碑标签一律用 `local-` 前缀（如 `local-4.15.2`），
@@ -158,11 +159,15 @@
 - **备份**：升级前留有 `backup-pre-upgrade-20260917` 分支与 `backup-20260917` 标签
 - **与上游同步流程**：
   1. 先确认本地没有脏标签（见上）
-  2. `git fetch origin --tags --prune`
-  3. `git rebase origin/master`，预期冲突集中在
+  2. `git fetch upstream --tags --prune`
+  3. `git rebase upstream/master`，预期冲突集中在
      `instaloader/__init__.py`（版本号）、`instaloadercontext.py`、`structures.py`
   4. 冲突取舍原则：**上游已实现同名能力时采用上游**（上游已自带 `web_profile_info` 方案），
      仅保留上游没有的本地增强（如 `Post._obtain_metadata` 的 Web API 优先路径）
+  5. 完成后 `git push origin master --tags`
+
+> ⚠️ 保存 `.py` 文件前注意：用户级设置开启了 formatOnSave，Ruff 会把上游风格代码全量重排。
+> 本项目已用 `.vscode/settings.json` 关闭 Python 的保存时自动格式化，不要删掉它。
 
 ### 上游已自带的能力（本地勿重复实现）
 
