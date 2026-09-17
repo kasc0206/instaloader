@@ -22,6 +22,8 @@ Instagram 下载工具 - Fork of Instaloader
 import os
 import re
 import sys
+import json
+import time
 import argparse
 import getpass
 from pathlib import Path
@@ -258,6 +260,11 @@ def main():
                               help="Instagram 用户链接或用户名")
     target_group.add_argument("--file", dest="url_file", default=None,
                               help="包含 Instagram 链接的文件路径")
+    target_group.add_argument("--batch-file", dest="batch_file", default=None,
+                             help="批量下载用户列表文件（每行一个用户名），支持断点续传")
+    target_group.add_argument("--batch-resume", dest="batch_resume",
+                             action="store_true",
+                             help="恢复上次中断的批量下载任务")
 
     login_group = parser.add_argument_group("登录设置（下载私密内容必需）")
     login_group.add_argument("--login", dest="login_user", default=None,
@@ -337,16 +344,66 @@ def main():
                 print(f"❌ 文件不存在: {args.url_file}")
                 sys.exit(1)
 
-        if not usernames:
-            print("❌ 未指定目标用户。使用 --url、--file 或 --update-all。")
-            parser.print_help()
-            sys.exit(1)
+    # --batch-file 模式：批量下载，支持断点续传
+    resume_index = 0
+    state_file = output_dir / ".batch_state.json"
+    if args.batch_file or args.batch_resume:
+        usernames = []  # 清空，batch 模式独立处理
+        if args.batch_resume:
+            # 恢复模式：从 state 文件中读取
+            if not state_file.exists():
+                print(f"❌ 未找到断点状态文件 {state_file}，无法恢复")
+                sys.exit(1)
+            try:
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+                usernames = state['pending']
+                resume_index = state.get('index', 0)
+                completed = state.get('completed', [])
+                print(f"🔄 恢复上次任务：已完成 {len(completed)} 个，待下载 {len(usernames)} 个")
+                if completed:
+                    print(f"   已完成的用户: {', '.join(completed[-5:])}...")
+                if usernames:
+                    print(f"   从第 {resume_index + 1} 个开始: @{usernames[0]}")
+            except Exception as e:
+                print(f"❌ 读取状态文件失败: {e}")
+                sys.exit(1)
+        else:
+            # 首次批量模式：读取用户列表文件
+            try:
+                with open(args.batch_file, 'r') as f:
+                    batch_users = [line.strip() for line in f
+                                   if line.strip() and not line.startswith('#')]
+            except FileNotFoundError:
+                print(f"❌ 文件不存在: {args.batch_file}")
+                sys.exit(1)
 
-        seen = set()
-        usernames = [u for u in usernames if not (u in seen or seen.add(u))]
-        print(f"🎯 共 {len(usernames)} 个目标用户:")
-        for u in usernames:
-            print(f"   - {u}")
+            # 跳过已下载的用户
+            if output_dir.is_dir():
+                existing = {d.name for d in output_dir.iterdir()
+                           if d.is_dir() and not d.name.startswith('.')}
+                batch_users = [u for u in batch_users if u not in existing]
+                if existing:
+                    print(f"⏭️  跳过 {len(existing)} 个已下载用户")
+
+            print(f"📋 批量下载任务：共 {len(batch_users)} 个用户")
+            usernames = batch_users
+
+            # 保存初始状态
+            state = {'index': 0, 'completed': [], 'pending': usernames}
+            with open(state_file, 'w') as f:
+                json.dump(state, f, ensure_ascii=False)
+
+        # 批量模式默认使用快速模式+头像
+        if not args.stories and not args.highlights and not args.tagged \
+                and not args.reels and not args.igtv and not args.download_all:
+            args.fast_update = True
+            args.avatar = True
+        usernames = usernames[resume_index:]
+    elif not usernames:
+        print("❌ 未指定目标用户。使用 --url、--file、--batch-file 或 --update-all。")
+        parser.print_help()
+        sys.exit(1)
 
     # 初始化 Instaloader
     output_dir = Path(args.output).resolve()
@@ -416,28 +473,67 @@ def main():
 
     # 逐个下载
     success_count = 0
+    total = len(usernames)
     for i, username in enumerate(usernames, 1):
+        actual_idx = resume_index + i
         print(f"\n{'#'*60}")
-        print(f"进度: [{i}/{len(usernames)}]")
-        try:
-            download_profile_content(
-                loader, username,
-                download_stories=args.stories,
-                download_highlights=args.highlights,
-                download_avatar=args.avatar,
-                download_tagged=args.tagged,
-                download_reels=args.reels,
-                download_igtv=args.igtv,
-                fast_update=args.fast_update,
-            )
-            success_count += 1
-        except Exception as e:
-            print(f"\n❌ 处理 '{username}' 时出错: {e}")
+        print(f"进度: [{actual_idx}/{total if not args.batch_file else total + resume_index}]")
+        print(f"用户: @{username}")
+        max_retries = 3
+        for retry in range(max_retries):
+            try:
+                download_profile_content(
+                    loader, username,
+                    download_stories=args.stories,
+                    download_highlights=args.highlights,
+                    download_avatar=args.avatar,
+                    download_tagged=args.tagged,
+                    download_reels=args.reels,
+                    download_igtv=args.igtv,
+                    fast_update=args.fast_update,
+                )
+                success_count += 1
+                # 更新批量状态
+                if args.batch_file or args.batch_resume:
+                    try:
+                        with open(state_file, 'r') as f:
+                            state = json.load(f)
+                        state['completed'].append(username)
+                        state['pending'] = usernames[i:] if i < len(usernames) else []
+                        state['index'] = actual_idx
+                        with open(state_file, 'w') as f:
+                            json.dump(state, f, ensure_ascii=False)
+                    except Exception:
+                        pass
+                break
+            except instaloader.ConnectionException as e:
+                error_msg = str(e)
+                if retry < max_retries - 1:
+                    print(f"\n⚠️  连接错误，等待 {(retry + 1) * 60} 秒后重试 ({retry + 1}/{max_retries})...")
+                    print(f"   错误: {error_msg[:100]}")
+                    time.sleep((retry + 1) * 60)
+                else:
+                    print(f"\n❌ 重试 {max_retries} 次后仍失败: {error_msg[:150]}")
+            except Exception as e:
+                print(f"\n❌ 处理 '{username}' 时出错: {e}")
+                break
 
     print(f"\n{'='*60}")
-    print(f"📊 完成！成功: {success_count}/{len(usernames)}")
+    total_all = total + resume_index
+    print(f"📊 完成！成功: {success_count}/{total_all}")
     print(f"   输出目录: {output_dir.resolve()}")
     print(f"{'='*60}")
+
+    if args.batch_file or args.batch_resume:
+        # 清理状态文件
+        if success_count == total:
+            try:
+                state_file.unlink()
+                print("✅ 批量任务全部完成，状态文件已清除")
+            except Exception:
+                pass
+        else:
+            print(f"💾 任务未完成，下次可使用 --batch-resume 继续")
 
     if loader.context.has_stored_errors:
         print("\n⚠️  部分下载出错，请查看上方日志。")
