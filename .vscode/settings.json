@@ -1,0 +1,14 @@
+{
+  // ⚠️ 本项目是 instaloader 上游代码的 fork，源码风格与 Ruff/Black 默认风格不同
+  // （上游以单引号为主、import 保持括号折行）。
+  // 用户级设置开启了 editor.formatOnSave=true 且 Python 默认格式化器为 Ruff，
+  // 保存任意 .py 都会把整个文件重排，产生上千行无意义 diff。
+  // 因此在此项目内关闭 Python 的保存时自动格式化；需要格式化时用 Shift+Alt+F 手动触发。
+  "[python]": {
+    "editor.formatOnSave": false
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true
+  }
+}
