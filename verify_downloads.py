@@ -24,7 +24,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import instaloader
-
 from rate_limiter import add_profile_args, get_limiter
 
 DEFAULT_OUTPUT_DIR = "download_test"
