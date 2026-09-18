@@ -18,6 +18,7 @@
 │   ├── lateststamps.py           # 时间戳管理
 │   ├── exceptions.py             # 自定义异常
 │   └── __main__.py               # CLI 入口
+├── rate_limiter.py               # 统一限速模块（反爬频率规范）
 ├── import_cookies.py             # 浏览器 Cookie 导入 / 会话生成
 ├── fetch_all_followers.py        # 粉丝采集器
 ├── analyze_followers.py          # 粉丝关注关系分析
@@ -35,6 +36,14 @@
 ```
 
 ## 自定义脚本
+
+### `rate_limiter.py` — 统一限速模块（基础设施）
+
+- 把手写 `requests.Session.get()` 的请求纳入与上游 `RateController` 一致的滑动窗口限速
+- 按端点分类计数：`other` 75 次/660s、`graphql` 200 次/660s、`iphone` 199 次/1800s
+- 429 后递增冷却（60s 起，上限 30 分钟），成功后逐步消除
+- 提供 `add_profile_args(parser)` 统一挂载 `--rate-profile` / `--min-interval`
+- 参数细节与用法见「🚦 请求频率规范」
 
 ### `import_cookies.py` — 浏览器 Cookie 导入 / 会话生成（登录前置步骤）
 
@@ -201,6 +210,45 @@
   GraphQL 回退）、`_convert_api_item_to_graphql()`（供 NodeIterator 的 Web API 路径使用）
 
 ## 常见工作流
+
+### 🚦 请求频率规范（新增脚本必读）
+
+**上游 instaloader `RateController` 的参数**（`instaloadercontext.py`）：
+
+| 端点类型                                   | 上限   | 滑动窗口 | 等效间隔    |
+| ------------------------------------------ | ------ | -------- | ----------- |
+| `other`（www 的 REST，如 `friendships/*`） | 75 次  | 660 秒   | ≈ 8.8 秒/次 |
+| `graphql` / `doc_id`                       | 200 次 | 660 秒   | ≈ 3.3 秒/次 |
+| 所有 graphql 累计                          | 275 次 | 600 秒   | —           |
+| `iphone`（i.instagram.com）                | 199 次 | 1800 秒  | ≈ 9 秒/次   |
+
+**⚠️ 历史教训**：本项目的自定义脚本原先直接用 `requests.Session.get()`，
+完全绕过了限速 —— `fetch_all_followers.py` 是 **2 秒/页**，比上游 `other` 类
+允许的 8.8 秒**快 4.4 倍**，这是被限流的主要原因。
+
+**现在统一使用 `rate_limiter.py`**：
+
+```python
+from rate_limiter import add_profile_args, get_limiter
+
+limiter = get_limiter()      # 单例，默认 upstream 档位
+limiter.acquire(url)         # 请求前调用：必要时等待并登记
+resp = session.get(url, ...)
+if resp.status_code == 429:
+    limiter.penalize(url)    # 递增冷却（60s 起，上限 30 分钟）
+else:
+    limiter.reward()         # 成功后逐步消除惩罚
+```
+
+档位通过 `--rate-profile` 选择：`upstream`（默认，严格遵循上游）/
+`conservative`（上游的 70%，已出现 429 时用）/ `off`（不主动限速，自担风险）。
+
+**已接入**：`fetch_all_followers.py`、`analyze_kasc0206.py`、`analyze_followers.py`；
+库侧 fork 新增的 Web API 方法（media info / feed user / usertags / igtv）
+通过 `_wait_before_web_api_call()` 接入上游 `RateController`。
+
+**新增脚本时**：凡绕过 `InstaloaderContext.get_json()` 直接发请求的，
+都必须调用 `get_limiter().acquire(url)`。
 
 ### ⚠️ 遇到 429 限流怎么办（高频问题）
 
