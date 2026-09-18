@@ -204,8 +204,32 @@
 
 ### ⚠️ 遇到 429 限流怎么办（高频问题）
 
-Instagram 会对出口 IP 限流，此时**任何** API 调用都返回 `HTTP 429`，
-`test_login()` 必定失败，脚本会在第一步就退出（看起来像"什么都没做"）。
+**关键结论：Instagram 的限流是「按端点」的，不是整个 IP 被封。**
+
+实测（同一 IP、同一 cookies，2026-09-18）：
+
+| 端点 | 用途 | 状态 |
+|---|---|---|
+| `api/v1/friendships/{id}/followers/` | 粉丝列表 | ✅ 200 可用 |
+| `api/v1/friendships/{id}/following/` | 关注列表 | ✅ 200 可用 |
+| `api/v1/users/web_profile_info/` | 用户资料 | ❌ 429 被限流 |
+| `api/v1/feed/user/{id}/` | 帖子列表 | ❌ 302 |
+| `i.instagram.com/api/v1/users/{id}/info/` | App 资料 | ❌ fail（缺设备签名） |
+
+所以**粉丝/关注采集能照常跑**，只有依赖 `web_profile_info` 的功能
+（`Profile.from_username()` → 进而 `ins_downloader.py` 全流程）会失败。
+
+**为什么浏览器"能正常访问"但脚本被限流**：浏览网页走 HTML 与另外的 API，
+和被限流的 `web_profile_info` 不在同一个限流桶里。
+
+**不要用 `Profile.from_username()` 做前置步骤**。`fetch_all_followers.py` 已改为
+优先从 `--user-id` 或本地 `*_analysis.json` 读取 user_id，无需调用该端点：
+
+```bash
+# 粉丝采集（绕开 web_profile_info，限流期间可正常跑）
+python3 fetch_all_followers.py --skip-check --max-pages 200
+python3 fetch_all_followers.py --skip-check --user-id 144511281
+```
 
 **判断方法**（不依赖 instaloader，几秒出结果）：
 
@@ -213,19 +237,17 @@ Instagram 会对出口 IP 限流，此时**任何** API 调用都返回 `HTTP 42
 python3 -c "import requests; print(requests.get('https://www.instagram.com/api/v1/users/web_profile_info/?username=natgeo', timeout=5).status_code)"
 ```
 
-返回 `429` 即为限流，与代码无关。
-
 **为什么以前会"卡住"**：instaloader 的 `RateController.handle_429()` 会
 `sleep(waittime)` 等待（可能数十分钟），期间只打印一行提示。若再用
 `| tail` 之类的管道过滤输出，缓冲会让等待期完全不可见。
 
-**现在怎么做**：
+**限流期间可用的运行参数**：
 
 ```bash
-# 1) 快速失败而不是干等
+# 快速失败而不是干等（但 Profile 解析仍会被 429 挡住）
 python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
 
-# 2) 粉丝采集同理
+# 粉丝采集：跳过校验 + 连续被限流即退出
 python3 fetch_all_followers.py --skip-check --max-consec-429 3
 ```
 
