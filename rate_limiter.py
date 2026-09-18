@@ -168,23 +168,30 @@ class SlidingWindowRateLimiter:
                 self._cooldown_until = 0.0
 
     def steady_interval(self, url_or_key: str) -> float:
-        """返回该类请求在滑动窗口下的稳态最小间隔（秒/次）。
+        """返回该类请求的稳态最小间隔（秒/次）。
 
         用于估算 ETA：滑动窗口允许突发（窗口内未超上限时不等待），
         但长期平均速率不会超过 ``窗口 / 上限``。
+
+        注意需与 ``--min-interval`` 取大 —— 否则传了 ``--min-interval``
+        时 ETA 会被严重低估（实际按 min_interval 走，ETA 却按窗口算）。
         """
         if not self.enabled:
             return self._min_interval
         key = classify_url(url_or_key)
         limit = self._limits.get(key, self._limits.get("other", 75)) or 1
-        return self._window_for(key) / limit
+        return max(self._min_interval, self._window_for(key) / limit)
 
     def describe(self) -> str:
         if not self.enabled:
-            return "主动限速已关闭（仅靠固定延迟）"
-        parts = ", ".join(f"{k}={v}/{int(self._window_for(k))}s"
-                          for k, v in sorted(self._limits.items()))
-        return f"限速档位 {self.profile}（{parts}）"
+            base = "主动限速已关闭（仅靠固定延迟）"
+        else:
+            parts = ", ".join(f"{k}={v}/{int(self._window_for(k))}s"
+                              for k, v in sorted(self._limits.items()))
+            base = f"限速档位 {self.profile}（{parts}）"
+        if self._min_interval > 0:
+            base += f" + 最小间隔 {self._min_interval:.0f}s"
+        return base
 
 
 _limiter: Optional[SlidingWindowRateLimiter] = None
