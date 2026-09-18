@@ -39,6 +39,45 @@ from instaloader import Post, Profile, ProfileNotExistsException
 SUPPORTED_BROWSERS = ["brave", "chrome", "chromium", "edge", "firefox",
                        "librewolf", "opera", "opera_gx", "safari", "vivaldi"]
 
+# 记录已确认不存在的账号（被删除/改名），--update-all 时自动跳过
+GONE_ACCOUNTS_NAME = "_gone_accounts.txt"
+
+
+def load_gone_accounts(output_dir: Path) -> set:
+    """读取「已不存在账号」名单。每行格式：用户名<TAB>日期[<TAB>原因]"""
+    path = output_dir / GONE_ACCOUNTS_NAME
+    if not path.is_file():
+        return set()
+    names = set()
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                names.add(line.split("\t")[0].strip())
+    except OSError as e:
+        print(f"⚠️ 读取 {GONE_ACCOUNTS_NAME} 失败: {e}")
+    return names
+
+
+def mark_gone_account(output_dir: Path, username: str, reason: str = "",
+                      already: set = None) -> None:
+    """把确认不存在的账号记入名单，避免每次 --update-all 都白跑一趟。"""
+    if already is not None and username in already:
+        return
+    path = output_dir / GONE_ACCOUNTS_NAME
+    line = f"{username}\t{time.strftime('%Y-%m-%d')}"
+    if reason:
+        line += f"\t{reason}"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        if already is not None:
+            already.add(username)
+        print(f"  📝 已记入 {GONE_ACCOUNTS_NAME}，后续自动跳过: {username}")
+    except OSError as e:
+        print(f"  ⚠️ 无法写入 {GONE_ACCOUNTS_NAME}: {e}")
+
 
 class FailFastRateController(instaloader.RateController):
     """遇 HTTP 429 立即失败，而不是进入长时间休眠。
@@ -171,12 +210,15 @@ def download_profile_content(loader: instaloader.Instaloader,
                               download_reels: bool = False,
                               download_igtv: bool = False,
                               fast_update: bool = False,
-                              fill_gaps: bool = False) -> bool:
+                              fill_gaps: bool = False,
+                              gone_dir: Path = None) -> bool:
     """下载指定用户的所有内容
 
     :param fill_gaps: 补齐模式。不依赖 ``fast_update`` 的「遇到已存在就停」
         假设（该假设在帖子列表中间存在缺失时会失效，且无法自愈），
         改为逐个帖子比对本地是否已有该日期文件，只下载缺失的。
+    :param gone_dir: 若指定，用户不存在时会把用户名记入该目录下的
+        ``_gone_accounts.txt``，之后 ``--update-all`` 将自动跳过。
     :return: 是否成功（用户解析与整体下载未遇到致命异常）
     """
     try:
@@ -279,7 +321,9 @@ def download_profile_content(loader: instaloader.Instaloader,
         return True
 
     except ProfileNotExistsException:
-        print(f"❌ 用户 '{username}' 不存在")
+        print(f"❌ 用户 '{username}' 不存在（账号已删除或改名）")
+        if gone_dir is not None:
+            mark_gone_account(gone_dir, username, "ProfileNotExists")
         return False
     except instaloader.PrivateProfileNotFollowedException:
         print(f"❌ 用户 '{username}' 是私密账号，你的账号未关注该用户")
@@ -398,13 +442,20 @@ def main():
     # --update-all 模式：扫描输出目录中已有的用户
     if args.update_all:
         if output_dir.is_dir():
+            gone = load_gone_accounts(output_dir)
             for entry in sorted(output_dir.iterdir()):
-                if entry.is_dir() and not entry.name.startswith('.'):
-                    usernames.append(entry.name)
+                if not entry.is_dir() or entry.name.startswith('.'):
+                    continue
+                if entry.name in gone:
+                    continue
+                usernames.append(entry.name)
+            if gone:
+                print(f"🚫 按 {GONE_ACCOUNTS_NAME} 跳过 {len(gone)} 个已不存在账号: "
+                      f"{', '.join(sorted(gone))}")
             if usernames:
                 print(f"🔄 更新模式：扫描到 {len(usernames)} 个已下载的用户")
             else:
-                print(f"❌ 输出目录 '{output_dir}' 中未找到已下载的用户")
+                print(f"❌ 输出目录 '{output_dir}' 中未找到需更新的用户")
                 sys.exit(1)
         else:
             print(f"❌ 输出目录 '{output_dir}' 不存在")
@@ -600,6 +651,7 @@ def main():
                     download_igtv=args.igtv,
                     fast_update=args.fast_update,
                     fill_gaps=args.fill_gaps,
+                    gone_dir=output_dir,
                 )
             except instaloader.ConnectionException as e:
                 # download_profile_content 内部已捕获大部分异常，这里仅作兜底重试
