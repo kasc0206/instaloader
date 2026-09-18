@@ -12,15 +12,17 @@
   # 自动模式：每隔 5~8 分钟获取一批，每批 25 个
   python3 analyze_kasc0206.py --auto
 """
+import argparse
+import json
 import os
+import random
 import sys
 import time
-import json
-import random
-import argparse
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import requests
+
 import instaloader
 from instaloader import Profile
 
@@ -30,6 +32,7 @@ OUTPUT_FILE = f"{USERNAME}_analysis.json"
 BATCH_SIZE = 25
 MIN_DELAY = 300    # 5 分钟
 MAX_DELAY = 480    # 8 分钟
+MAX_FETCH_ATTEMPTS = 3  # 单个用户最多尝试获取详情的次数，超过则不再重试（避免 --auto 死循环）
 
 
 def load_cookies(loader, browser, skip_login_check=False):
@@ -191,12 +194,27 @@ def load_existing():
 
 
 def find_pending_users(data):
-    """找出还没有详细信息的用户（按原顺序返回）"""
+    """找出还没有详细信息的用户（按原顺序返回）
+
+    判定规则：
+    - 以 ``follower_count`` 键是否存在为准（真的 0 粉丝也算已获取，不会被反复重试）
+    - 连续失败 MAX_FETCH_ATTEMPTS 次的用户不再重试（私密账号无权限等情况）
+    """
     pending = []
     for i, u in enumerate(data["followees"]):
-        if not u.get("follower_count"):  # 0 or missing = 未获取
-            pending.append((i, u))
+        if "follower_count" in u:
+            continue
+        if u.get("_fetch_failed", 0) >= MAX_FETCH_ATTEMPTS:
+            continue
+        pending.append((i, u))
     return pending
+
+
+def count_skipped(data):
+    """返回因多次失败而被跳过的用户数"""
+    return sum(1 for u in data["followees"]
+               if "follower_count" not in u
+               and u.get("_fetch_failed", 0) >= MAX_FETCH_ATTEMPTS)
 
 
 def do_batch(session, data, batch_size=BATCH_SIZE):
@@ -208,10 +226,9 @@ def do_batch(session, data, batch_size=BATCH_SIZE):
 
     batch = pending[:batch_size]
     success = 0
-    total_done = len(data["followees"]) - len(pending) + success
-    total_left = len(pending)
+    already_done = len(data["followees"]) - len(pending)
 
-    print(f"\n📋 本轮目标: {len(batch)} 个用户 (已完成 {total_done - success}，剩余 {total_left})")
+    print(f"\n📋 本轮目标: {len(batch)} 个用户 (已完成 {already_done}，剩余 {len(pending)})")
 
     for idx, (orig_idx, user) in enumerate(batch):
         uname = user["username"]
@@ -220,18 +237,28 @@ def do_batch(session, data, batch_size=BATCH_SIZE):
 
         detail = fetch_profile_details_via_api(session, uname)
         if detail:
-            data["followees"][orig_idx].update(detail)
+            entry = data["followees"][orig_idx]
+            entry.update(detail)
+            entry.pop("_fetch_failed", None)
             success += 1
             time.sleep(0.5)
         else:
             # 失败的可能原因：私密账号无权查看 / API限制 / 网络
+            entry = data["followees"][orig_idx]
+            entry["_fetch_failed"] = entry.get("_fetch_failed", 0) + 1
+            if entry["_fetch_failed"] >= MAX_FETCH_ATTEMPTS:
+                sys.stdout.write(
+                    f"\r   ⚠️  @{uname} 已连续失败 {MAX_FETCH_ATTEMPTS} 次，本轮后不再重试\n"
+                )
             time.sleep(1.5)
 
-    total_done = len(data["followees"]) - len(pending) + success
-    total_left = len(pending) - len(batch)
-    print(f"\n   ✅ 本轮成功: {success}/{len(batch)}，累计完成: {total_done}，剩余: {total_left}")
+    remaining = find_pending_users(data)
+    total_done = len(data["followees"]) - len(remaining)
+    skipped = count_skipped(data)
+    print(f"\n   ✅ 本轮成功: {success}/{len(batch)}，累计完成: {total_done}，剩余: {len(remaining)}"
+          + (f"，已跳过: {skipped}" if skipped else ""))
 
-    return success, total_done, total_left
+    return success, total_done, len(remaining)
 
 
 def print_report(data):
@@ -377,30 +404,14 @@ def run_resume(auto_mode=False, skip_check=False):
     print(f"   已有详情: {len(with_stats)} 人")
 
     if total_left > 0:
-        if auto_mode:
-            wait = random.randint(MIN_DELAY, MAX_DELAY)
-            mins = wait // 60
-            secs = wait % 60
-            print(f"\n⏳ 等待 {mins} 分 {secs} 秒后继续下一批...")
-            for remaining in range(wait, 0, -1):
-                mins_left = remaining // 60
-                secs_left = remaining % 60
-                sys.stdout.write(f"\r   下次获取倒计时: {mins_left:02d}:{secs_left:02d}")
-                sys.stdout.flush()
-                time.sleep(1)
-            print("\n")
-
-            # 递归调用（自动模式，即本函数自己）
-            # 但为避免递归过深，用循环替代
-            # 这里返回后由 run_auto 的循环处理
-            return True  # 信号量：还有剩余，继续
-        else:
+        if not auto_mode:
             print(f"\n💡 剩余 {total_left} 个，下次运行:")
             print("   python3 analyze_kasc0206.py --resume")
-    else:
-        print("\n🎉 全部完成！")
-        print_report(data)
+        # 等待交由 run_auto 统一处理，本函数不阻塞
+        return True  # 信号量：还有剩余，继续
 
+    print("\n🎉 全部完成！")
+    print_report(data)
     return False  # 信号量：全部完成
 
 
@@ -412,22 +423,30 @@ def run_auto(skip_check=False):
     print(f"{'='*60}")
 
     round_num = 1
-    while True:
-        print(f"\n{'─'*60}")
-        print(f"📌 第 {round_num} 轮")
-        print(f"{'─'*60}")
+    try:
+        while True:
+            print(f"\n{'─'*60}")
+            print(f"📌 第 {round_num} 轮")
+            print(f"{'─'*60}")
 
-        has_more = run_resume(auto_mode=True, skip_check=skip_check)
+            if not run_resume(auto_mode=True, skip_check=skip_check):
+                print("\n🎉 所有数据获取完成！")
+                break
 
-        if not has_more:
-            print("\n🎉 所有数据获取完成！")
-            break
-
-        round_num += 1
-        wait = random.randint(MIN_DELAY, MAX_DELAY)
-        mins = wait // 60
-        secs = wait % 60
-        print(f"\n⏳ 第 {round_num} 轮等待 {mins} 分 {secs} 秒...")
+            round_num += 1
+            wait = random.randint(MIN_DELAY, MAX_DELAY)
+            mins, secs = divmod(wait, 60)
+            print(f"\n⏳ 第 {round_num} 轮前等待 {mins} 分 {secs} 秒"
+                  f"（Ctrl+C 可随时中断，已完成数据已落盘）...")
+            for remaining in range(wait, 0, -1):
+                m, s = divmod(remaining, 60)
+                sys.stdout.write(f"\r   倒计时: {m:02d}:{s:02d}")
+                sys.stdout.flush()
+                time.sleep(1)
+            print("\n")
+    except KeyboardInterrupt:
+        print("\n\n⏹️  已手动中断（本轮数据已保存）")
+        return
 
 
 def main():
@@ -451,10 +470,6 @@ def main():
         run_resume(skip_check=args.skip_check)
     else:
         run_full_scan(skip_check=args.skip_check)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
