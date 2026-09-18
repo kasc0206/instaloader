@@ -59,7 +59,8 @@
 - 保守速率控制（2s 延迟 + 429 重试）
 - 每 10 页自动保存进度
 - 支持 Ctrl+C 优雅退出
-- 输入：用户名列表文件
+- 限流防护：`--skip-check`（跳过 `test_login` 校验）、
+  `--max-consec-429 N`（连续被限流 N 次即保存退出，默认 5，避免无限等待）
 - 输出：`{username}__all_followers.json`、`{username}__follower_usernames.txt`
 
 ### `analyze_followers.py` — 粉丝关注关系分析
@@ -77,7 +78,12 @@
   - 跳过登录验证：`python3 analyze_kasc0206.py --resume --skip-check`
   - 自动批量：`python3 analyze_kasc0206.py --auto --skip-check`
 - 每次获取 25 个用户详情，频率受限时自动等待
+- 待获取判定：以 `follower_count` 键是否存在为准（**真 0 粉丝也算已获取**）；
+  单用户连续失败 3 次后写入 `_fetch_failed` 计数并跳过，避免 `--auto` 死循环
+- 等待倒计时由 `--auto` 统一负责，`--resume` 不阻塞
 - 输出：`kasc0206_analysis.json`
+
+> ℹ️ 当前 `kasc0206_analysis.json` 中 552 个关注**已全部采集完毕**，`--resume` 无待办。
 
 ### `analyze_mutual.py` — 相互关注用户详情
 
@@ -89,6 +95,19 @@
 - 支持浏览器 Cookie 登录或用户名密码
 - 支持下载 Profile、Story、Highlight、Reels、Hashtag 等
 - 支持快速增量更新（`--fast-update`）
+- 批量下载：`--batch-file <列表文件>` / `--batch-resume`（断点保存在 `<输出目录>/.batch_state.json`，
+  结构为 `all` + `index` + `completed`，失败用户不记入断点）
+- 限流防护：`--skip-check`（跳过 `test_login` 校验）、
+  `--no-wait-429`（遇 429 立即报错退出，不进入长时间休眠）
+- 示例：
+  ```bash
+  # 单用户增量更新（限流时快速失败，不卡住）
+  python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
+
+  # 批量下载（可中断后继续）
+  python3 ins_downloader.py --load-cookies edge --batch-file users.txt --skip-check
+  python3 ins_downloader.py --load-cookies edge --batch-resume --skip-check
+  ```
 
 ## 数据文件格式
 
@@ -181,6 +200,36 @@
   GraphQL 回退）、`_convert_api_item_to_graphql()`（供 NodeIterator 的 Web API 路径使用）
 
 ## 常见工作流
+
+### ⚠️ 遇到 429 限流怎么办（高频问题）
+
+Instagram 会对出口 IP 限流，此时**任何** API 调用都返回 `HTTP 429`，
+`test_login()` 必定失败，脚本会在第一步就退出（看起来像"什么都没做"）。
+
+**判断方法**（不依赖 instaloader，几秒出结果）：
+
+```bash
+python3 -c "import requests; print(requests.get('https://www.instagram.com/api/v1/users/web_profile_info/?username=natgeo', timeout=5).status_code)"
+```
+
+返回 `429` 即为限流，与代码无关。
+
+**为什么以前会"卡住"**：instaloader 的 `RateController.handle_429()` 会
+`sleep(waittime)` 等待（可能数十分钟），期间只打印一行提示。若再用
+`| tail` 之类的管道过滤输出，缓冲会让等待期完全不可见。
+
+**现在怎么做**：
+
+```bash
+# 1) 快速失败而不是干等
+python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
+
+# 2) 粉丝采集同理
+python3 fetch_all_followers.py --skip-check --max-consec-429 3
+```
+
+**解除限流的手段**：等待（通常数十分钟到数小时）或更换出口 IP（切换网络最有效）。
+被限流期间不要反复重试，会延长封锁时间。
 
 ### 0. 刷新登录状态（前置步骤）
 
