@@ -12,6 +12,7 @@ import signal
 import sys
 import time
 from datetime import datetime
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
@@ -150,7 +151,37 @@ def parse_user(item):
     }
 
 
-def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429):
+def resolve_user_id(loader: instaloader.Instaloader, username: str,
+                    override: Optional[int] = None) -> int:
+    """解析目标 user_id。
+
+    优先使用本地已有数据，避免调用被 Instagram 限流的 ``web_profile_info`` 端点：
+    1) ``--user-id`` 显式指定
+    2) 本地 ``{username}__analysis.json`` / ``{username}_analysis.json``
+    3) 回退到 ``Profile.from_username()``（在线解析，可能返回 429）
+    """
+    if override:
+        print(f"   user_id 来源: --user-id ({override})")
+        return int(override)
+
+    for candidate in (f"{username}__analysis.json", f"{username}_analysis.json"):
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, encoding="utf-8") as f:
+                    uid = (json.load(f).get("profile") or {}).get("userid")
+                if uid:
+                    print(f"   user_id 来源: {candidate} ({uid})")
+                    return int(uid)
+            except Exception as e:
+                print(f"   ⚠️  读取 {candidate} 失败: {e}")
+
+    print("   ⚠️  本地未找到 user_id，回退在线解析（web_profile_info 可能返回 429）")
+    return Profile.from_username(loader.context, username).userid
+
+
+def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429,
+         user_id_override: Optional[int] = None,
+         max_pages: Optional[int] = None):
     loader = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False)
 
     # 登录
@@ -178,9 +209,9 @@ def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429):
         loader.context.username = login_name
         print(f"✅ 已登录为 {login_name}")
 
-    profile = Profile.from_username(loader.context, USERNAME)
-    user_id = profile.userid
-    print(f"\n📊 目标: {profile.username} (ID: {user_id})")
+    # 解析 user_id（优先本地缓存，避开被限流的 web_profile_info）
+    user_id = resolve_user_id(loader, USERNAME, user_id_override)
+    print(f"\n📊 目标: {USERNAME} (ID: {user_id})")
     print(f"   粉丝总数: {TOTAL_FOLLOWERS:,}")
     print(f"{'='*60}\n")
 
@@ -199,7 +230,12 @@ def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429):
     last_save_count = state["count"]
 
     # ===== 主循环 =====
+    pages_this_run = 0
     while not stop_flag:
+        if max_pages is not None and pages_this_run >= max_pages:
+            print(f"\n  ⏹️  已达本次页数上限 ({max_pages})，保存进度后退出")
+            break
+        pages_this_run += 1
         page += 1
         users, next_max_id, error = fetch_one_page(session, headers, user_id, max_id)
 
@@ -323,9 +359,16 @@ def _parse_args():
                         help="跳过 test_login() 登录校验（限流 429 时使用）")
     parser.add_argument("--max-consec-429", type=int, default=MAX_CONSEC_429,
                         help=f"连续 429 达到此次数就保存退出（默认 {MAX_CONSEC_429}）")
+    parser.add_argument("--user-id", type=int, default=None,
+                        help="直接指定目标 user_id，跳过 Profile 解析（避开被限流的 web_profile_info）")
+    parser.add_argument("--max-pages", type=int, default=None,
+                        help="本次最多采集多少页后保存退出（分批运行用）")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     _args = _parse_args()
-    main(skip_check=_args.skip_check, max_consec_429=_args.max_consec_429)
+    main(skip_check=_args.skip_check,
+         max_consec_429=_args.max_consec_429,
+         user_id_override=_args.user_id,
+         max_pages=_args.max_pages)
