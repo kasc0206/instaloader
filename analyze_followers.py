@@ -2,16 +2,19 @@
 """
 分析 Instagram 账号的粉丝和关注数据 (使用 Web API)
 """
+import argparse
+import json
 import os
 import sys
 import time
-import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import requests
+
 import instaloader
 from instaloader import Profile
+from rate_limiter import add_profile_args, get_limiter
 
 BROWSER = "edge"
 USERNAME = "chrissylii_"
@@ -73,15 +76,19 @@ def fetch_friendship_via_api(session, user_id, endpoint, max_pages=None,
     retries_429 = 0
     retries_other = 0
     last_print = 0
+    limiter = get_limiter()
 
     while True:
         params = {"count": 50}
         if max_id:
             params["max_id"] = max_id
 
+        url = f"https://www.instagram.com/api/v1/friendships/{user_id}/{endpoint}/"
+        limiter.acquire(url)  # 按上游 other 类参数限速
+
         try:
             resp = session.get(
-                f"https://www.instagram.com/api/v1/friendships/{user_id}/{endpoint}/",
+                url,
                 params=params,
                 headers=headers,
                 timeout=30,
@@ -110,13 +117,8 @@ def fetch_friendship_via_api(session, user_id, endpoint, max_pages=None,
             if retries_429 > 5:
                 print(f"\n   ⚠️ 频率限制过多，停止获取 (已获取 {len(users)} 个)")
                 break
-            wait = 30 * retries_429
-            print(f"\n   ⏳ 频率限制 ({retries_429}/5)，等待 {wait}s...", end="", flush=True)
-            for s in range(wait):
-                time.sleep(1)
-                if s % 10 == 9:
-                    print(".", end="", flush=True)
-            print(" 继续")
+            # 交给限速器进入冷却（递增退避），不再硬编码 30s×N
+            limiter.penalize(url)
             continue
         if resp.status_code != 200:
             print(f"\n   ⚠️ API 返回 {resp.status_code}, 已获取 {len(users)} 个")
@@ -124,6 +126,7 @@ def fetch_friendship_via_api(session, user_id, endpoint, max_pages=None,
             break
 
         retries_429 = 0
+        limiter.reward()
         data = resp.json()
         items = data.get("users", [])
         if not items:
@@ -173,7 +176,9 @@ def _save_intermediate(output_file, profile, user_id, followees, followers):
         json.dump(output_data, f, ensure_ascii=False, indent=2)
 
 
-def main():
+def main(rate_profile=None, min_interval=None):
+    limiter = get_limiter(profile=rate_profile, min_interval=min_interval)
+    print(f"⚙️  {limiter.describe()}")
     loader = instaloader.Instaloader(
         quiet=True,
         download_pictures=False,
@@ -298,4 +303,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    _parser = argparse.ArgumentParser(description="Instagram 粉丝/关注关系分析")
+    add_profile_args(_parser)
+    _args = _parser.parse_args()
+    main(rate_profile=_args.rate_profile, min_interval=_args.min_interval)

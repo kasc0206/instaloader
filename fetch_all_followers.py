@@ -2,7 +2,8 @@
 """
 🔥 极端稳健的 Instagram 粉丝采集器
 - 断点续传（保存 cursor）
-- 保守的速率控制
+- 速率控制：默认遵循上游 instaloader 参数
+  （other 类 75 次/660 秒，即平均 ≈ 8.8 秒/次），可用 --rate-profile 切换档位
 - 可长时间运行
 """
 import argparse
@@ -19,6 +20,7 @@ import requests
 
 import instaloader
 from instaloader import Profile
+from rate_limiter import add_profile_args, get_limiter
 
 BROWSER = "edge"
 USERNAME = "chrissylii_"
@@ -106,9 +108,13 @@ def fetch_one_page(session, headers, user_id, max_id):
     if max_id:
         params["max_id"] = max_id
 
+    url = f"https://www.instagram.com/api/v1/friendships/{user_id}/followers/"
+    limiter = get_limiter()
+    limiter.acquire(url)  # 按上游 other 类参数（75 次/660s）限速，必要时等待
+
     try:
         resp = session.get(
-            f"https://www.instagram.com/api/v1/friendships/{user_id}/followers/",
+            url,
             params=params,
             headers=headers,
             timeout=60,
@@ -121,6 +127,7 @@ def fetch_one_page(session, headers, user_id, max_id):
         return None, None, f"request_error: {e}"
 
     if resp.status_code == 429:
+        limiter.penalize(url)  # 进入冷却，递增退避
         return None, None, "rate_limited"
     if resp.status_code == 401:
         return None, None, "session_expired"
@@ -128,6 +135,8 @@ def fetch_one_page(session, headers, user_id, max_id):
         return None, None, f"forbidden: {resp.text[:100]}"
     if resp.status_code != 200:
         return None, None, f"http_{resp.status_code}: {resp.text[:150]}"
+
+    limiter.reward()  # 成功一次，逐步消除 429 惩罚
 
     try:
         data = resp.json()
@@ -181,7 +190,9 @@ def resolve_user_id(loader: instaloader.Instaloader, username: str,
 
 def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429,
          user_id_override: Optional[int] = None,
-         max_pages: Optional[int] = None):
+         max_pages: Optional[int] = None,
+         rate_profile: Optional[str] = None,
+         min_interval: Optional[float] = None):
     loader = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False)
 
     # 登录
@@ -213,6 +224,10 @@ def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429,
     user_id = resolve_user_id(loader, USERNAME, user_id_override)
     print(f"\n📊 目标: {USERNAME} (ID: {user_id})")
     print(f"   粉丝总数: {TOTAL_FOLLOWERS:,}")
+
+    # 初始化限速器（默认遵循上游 instaloader 参数）
+    limiter = get_limiter(profile=rate_profile, min_interval=min_interval)
+    print(f"⚙️  {limiter.describe()}")
     print(f"{'='*60}\n")
 
     session = loader.context._session
@@ -363,6 +378,7 @@ def _parse_args():
                         help="直接指定目标 user_id，跳过 Profile 解析（避开被限流的 web_profile_info）")
     parser.add_argument("--max-pages", type=int, default=None,
                         help="本次最多采集多少页后保存退出（分批运行用）")
+    add_profile_args(parser)
     return parser.parse_args()
 
 
@@ -371,4 +387,6 @@ if __name__ == "__main__":
     main(skip_check=_args.skip_check,
          max_consec_429=_args.max_consec_429,
          user_id_override=_args.user_id,
-         max_pages=_args.max_pages)
+         max_pages=_args.max_pages,
+         rate_profile=_args.rate_profile,
+         min_interval=_args.min_interval)

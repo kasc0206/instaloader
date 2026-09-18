@@ -25,6 +25,7 @@ import requests
 
 import instaloader
 from instaloader import Profile
+from rate_limiter import add_profile_args, get_limiter
 
 BROWSER = "edge"
 USERNAME = "kasc0206"
@@ -87,6 +88,7 @@ def get_api_headers(session):
 def fetch_following(session, user_id):
     """获取关注列表"""
     headers = get_api_headers(session)
+    limiter = get_limiter()
     max_id = None
     users = []
     page_count = 0
@@ -97,11 +99,11 @@ def fetch_following(session, user_id):
         if max_id:
             params["max_id"] = max_id
 
+        url = f"https://www.instagram.com/api/v1/friendships/{user_id}/following/"
+        limiter.acquire(url)  # 按上游 other 类参数限速
+
         try:
-            resp = session.get(
-                f"https://www.instagram.com/api/v1/friendships/{user_id}/following/",
-                params=params, headers=headers, timeout=30,
-            )
+            resp = session.get(url, params=params, headers=headers, timeout=30)
         except requests.exceptions.RequestException as e:
             retries += 1
             if retries > 2:
@@ -113,13 +115,14 @@ def fetch_following(session, user_id):
         retries = 0
 
         if resp.status_code == 429:
-            print("\n   ⏳ 频率限制，等待 30s...")
-            time.sleep(30)
+            # 交给限速器进入冷却（递增退避），不再硬编码 30s
+            limiter.penalize(url)
             continue
         if resp.status_code != 200:
             print(f"\n   ⚠️ API 返回 {resp.status_code}, 已获取 {len(users)} 个")
             break
 
+        limiter.reward()
         data = resp.json()
         items = data.get("users", [])
         if not items:
@@ -149,15 +152,16 @@ def fetch_following(session, user_id):
 def fetch_profile_details_via_api(session, username):
     """通过 Instagram Web API 获取单个用户的详细资料"""
     headers = get_api_headers(session)
+    limiter = get_limiter()
+    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    limiter.acquire(url)
     try:
-        resp = session.get(
-            f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
-            headers=headers, timeout=15,
-        )
+        resp = session.get(url, headers=headers, timeout=15)
         if resp.status_code == 200:
             data = resp.json()
             user = data.get("data", {}).get("user", {})
             if user:
+                limiter.reward()
                 return {
                     "follower_count": user.get("edge_followed_by", {}).get("count", 0),
                     "following_count": user.get("edge_follow", {}).get("count", 0),
@@ -168,6 +172,8 @@ def fetch_profile_details_via_api(session, username):
                     "biography": (user.get("biography", "") or "")[:100],
                     "external_url": user.get("external_url", "") or "",
                 }
+        if resp.status_code == 429:
+            limiter.penalize(url)
         return None
     except Exception:
         return None
@@ -459,10 +465,14 @@ def main():
                         help="每批数量（默认 25）")
     parser.add_argument("--skip-check", action="store_true",
                         help="跳过登录验证（触发频率限制时使用）")
+    add_profile_args(parser)
     args = parser.parse_args()
 
     global BATCH_SIZE
     BATCH_SIZE = args.batch_size
+
+    limiter = get_limiter(profile=args.rate_profile, min_interval=args.min_interval)
+    print(f"⚙️  {limiter.describe()}")
 
     if args.auto:
         run_auto(skip_check=args.skip_check)
