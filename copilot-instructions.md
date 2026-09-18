@@ -100,6 +100,7 @@
 - 限流防护：`--skip-check`（跳过 `test_login` 校验）、
   `--no-wait-429`（遇 429 立即报错退出，不进入长时间休眠）
 - 示例：
+
   ```bash
   # 单用户增量更新（限流时快速失败，不卡住）
   python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
