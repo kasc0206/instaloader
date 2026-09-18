@@ -208,16 +208,16 @@
 
 实测（同一 IP、同一 cookies，2026-09-18）：
 
-| 端点                                             | 用途                | 状态                        |
-| ------------------------------------------------ | ------------------- | --------------------------- |
-| `api/v1/friendships/{id}/followers/`             | 粉丝列表            | ✅ 200 可用                 |
-| `api/v1/friendships/{id}/following/`             | 关注列表            | ✅ 200 可用                 |
-| `api/v1/users/edit/`                             | `test_login()`      | ✅ 200 可用                 |
-| `web/search/topsearch/`                          | 用户名 → user_id    | ✅ 200 可用                 |
-| `graphql/query?doc_id=27937681195819736`         | 用户资料（GraphQL） | ✅ 200 可用                 |
-| `api/v1/users/web_profile_info/`                 | 用户资料            | ❌ 429 / 400 feedback_required |
-| `api/v1/feed/user/{id}/`                         | 帖子列表（Feed API）| ❌ 302 / 400                |
-| `i.instagram.com/api/v1/users/{id}/info/`        | App 资料            | ❌ fail（缺设备签名）       |
+| 端点                                      | 用途                 | 状态                           |
+| ----------------------------------------- | -------------------- | ------------------------------ |
+| `api/v1/friendships/{id}/followers/`      | 粉丝列表             | ✅ 200 可用                    |
+| `api/v1/friendships/{id}/following/`      | 关注列表             | ✅ 200 可用                    |
+| `api/v1/users/edit/`                      | `test_login()`       | ✅ 200 可用                    |
+| `web/search/topsearch/`                   | 用户名 → user_id     | ✅ 200 可用                    |
+| `graphql/query?doc_id=27937681195819736`  | 用户资料（GraphQL）  | ✅ 200 可用                    |
+| `api/v1/users/web_profile_info/`          | 用户资料             | ❌ 429 / 400 feedback_required |
+| `api/v1/feed/user/{id}/`                  | 帖子列表（Feed API） | ❌ 302 / 400                   |
+| `i.instagram.com/api/v1/users/{id}/info/` | App 资料             | ❌ fail（缺设备签名）          |
 
 **代码已内置自动回退，一般不需要手动干预**：
 
