@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, IO, Iterator, List, Optional, Set, Union, cast
+from typing import IO, Any, Callable, Iterator, List, Optional, Set, Union, cast
 from urllib.parse import urlparse
 
 import requests
@@ -23,8 +23,20 @@ from .instaloadercontext import InstaloaderContext, RateController
 from .lateststamps import LatestStamps
 from .nodeiterator import NodeIterator, resumable_iteration
 from .sectioniterator import SectionIterator
-from .structures import (Hashtag, Highlight, JsonExportable, Post, PostLocation, Profile, Story, StoryItem,
-                         load_structure_from_file, save_structure_to_file, PostSidecarNode, TitlePic)
+from .structures import (
+    Hashtag,
+    Highlight,
+    JsonExportable,
+    Post,
+    PostLocation,
+    PostSidecarNode,
+    Profile,
+    Story,
+    StoryItem,
+    TitlePic,
+    load_structure_from_file,
+    save_structure_to_file,
+)
 
 
 def _get_config_dir() -> str:
@@ -1695,8 +1707,13 @@ class Instaloader:
             except Exception as graphql_err:
                 self.context.error(f"GraphQL 也失败 ({graphql_err})，跳过帖子下载。")
                 return
+        # possibly_pinned=3：Instagram 最多 3 个置顶帖，它们会排在列表最前但日期很旧。
+        # 若不跳过，fast_update 会在第 1 个已存在的置顶帖上就 break，导致新帖子全部漏下。
+        # 上游 download_profiles / download_hashtag / download_tagged 均已传该参数，
+        # 此处（download_profile）原先漏传，已补齐。
         self.posts_download_loop(posts_to_download, profile_name, fast_update, post_filter,
-                                 total_count=profile.mediacount, owner_profile=profile)
+                                 total_count=profile.mediacount, owner_profile=profile,
+                                 possibly_pinned=3)
 
     def interactive_login(self, username: str) -> None:
         """Logs in and internally stores session, asking user for password interactively.
