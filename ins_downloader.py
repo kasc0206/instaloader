@@ -33,7 +33,7 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import instaloader
-from instaloader import Profile, ProfileNotExistsException
+from instaloader import Post, Profile, ProfileNotExistsException
 
 # 支持的浏览器列表
 SUPPORTED_BROWSERS = ["brave", "chrome", "chromium", "edge", "firefox",
@@ -170,9 +170,13 @@ def download_profile_content(loader: instaloader.Instaloader,
                               download_tagged: bool = False,
                               download_reels: bool = False,
                               download_igtv: bool = False,
-                              fast_update: bool = False) -> bool:
+                              fast_update: bool = False,
+                              fill_gaps: bool = False) -> bool:
     """下载指定用户的所有内容
 
+    :param fill_gaps: 补齐模式。不依赖 ``fast_update`` 的「遇到已存在就停」
+        假设（该假设在帖子列表中间存在缺失时会失效，且无法自愈），
+        改为逐个帖子比对本地是否已有该日期文件，只下载缺失的。
     :return: 是否成功（用户解析与整体下载未遇到致命异常）
     """
     try:
@@ -200,8 +204,26 @@ def download_profile_content(loader: instaloader.Instaloader,
 
         # 下载所有帖子
         print("\n📥 下载帖子...")
+        post_filter = None
+        if fill_gaps:
+            # 只在补齐模式下启用：把「本地已有该日期文件」的帖子过滤掉。
+            # post_filter 返回 False 只会跳过单个帖子，不会像 fast_update 那样 break，
+            # 因此列表中间的历史缺失也能被补齐。
+            target_dir = Path(loader.dirname_pattern.format(target=profile.username))
+            local = set(os.listdir(target_dir)) if target_dir.is_dir() else set()
+
+            def _only_missing(post: Post) -> bool:
+                stamp = post.date_utc.strftime("%Y-%m-%d_%H-%M-%S_UTC")
+                return not any(f.startswith(stamp) for f in local)
+
+            post_filter = _only_missing
+            fast_update = False
+            print(f"  🔍 补齐模式：本地已有 {len(local)} 个文件，只下载缺失的帖子")
+
         try:
-            loader.download_profile(profile, profile_pic=False, fast_update=fast_update)
+            loader.download_profile(profile, profile_pic=False,
+                                    fast_update=fast_update,
+                                    post_filter=post_filter)
             print("  ✅ 帖子已下载")
         except Exception as e:
             print(f"  ⚠️ 帖子下载失败: {e}")
@@ -354,7 +376,11 @@ def main():
     download_group.add_argument("--all", action="store_true", dest="download_all",
                                 help="下载所有内容（头像+帖子+Stories+Highlights+Tagged+Reels+IGTV）")
     download_group.add_argument("--fast", action="store_true", dest="fast_update",
-                                help="快速模式，只下载新内容")
+                                help="快速模式，只下载新内容（注意：若历史上有遗漏，"
+                                     "因帖子列表中间的「已存在」会提前停止，无法自愈；"
+                                     "请用 --fill-gaps 修复）")
+    download_group.add_argument("--fill-gaps", action="store_true",
+                                help="补齐模式：逐个帖子比对本地文件，只下载缺失的（可修复历史遗漏）")
     download_group.add_argument("--output", "-o", default="download_test",
                                 help="输出目录（默认 download_test 目录）")
     download_group.add_argument("--update-all", action="store_true",
@@ -385,10 +411,14 @@ def main():
             sys.exit(1)
         # 更新模式默认使用快速模式
         args.fast_update = True
-        # 更新模式只下载头像 + 帖子（跳过 Stories/Highlights/Tagged/Reels/IGTV
+        # 更新模式只下载帖子（跳过 Stories/Highlights/Tagged/Reels/IGTV
         # 因为这些内容依赖的 graphql/query 接口容易被 Instagram 限制）
         args.download_all = False
-        args.avatar = True
+        # 不强制下载头像：头像走 i.instagram.com 端点，该端点目前已不可用
+        # （返回 status: fail），每个用户会白白重试 3 次、明显拖慢批量更新。
+        # 确有需要时显式加 --avatar。
+        if args.avatar:
+            print("ℹ️  注意：头像依赖 i.instagram.com 端点，该端点当前不可用，可能失败")
     else:
         if args.urls:
             for url in args.urls:
@@ -569,6 +599,7 @@ def main():
                     download_reels=args.reels,
                     download_igtv=args.igtv,
                     fast_update=args.fast_update,
+                    fill_gaps=args.fill_gaps,
                 )
             except instaloader.ConnectionException as e:
                 # download_profile_content 内部已捕获大部分异常，这里仅作兜底重试
