@@ -167,6 +167,18 @@ class SlidingWindowRateLimiter:
             if self._consecutive_429 == 0:
                 self._cooldown_until = 0.0
 
+    def steady_interval(self, url_or_key: str) -> float:
+        """返回该类请求在滑动窗口下的稳态最小间隔（秒/次）。
+
+        用于估算 ETA：滑动窗口允许突发（窗口内未超上限时不等待），
+        但长期平均速率不会超过 ``窗口 / 上限``。
+        """
+        if not self.enabled:
+            return self._min_interval
+        key = classify_url(url_or_key)
+        limit = self._limits.get(key, self._limits.get("other", 75)) or 1
+        return self._window_for(key) / limit
+
     def describe(self) -> str:
         if not self.enabled:
             return "主动限速已关闭（仅靠固定延迟）"

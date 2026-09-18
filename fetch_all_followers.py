@@ -228,6 +228,14 @@ def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429,
     # 初始化限速器（默认遵循上游 instaloader 参数）
     limiter = get_limiter(profile=rate_profile, min_interval=min_interval)
     print(f"⚙️  {limiter.describe()}")
+    # 稳态速率：滑动窗口允许突发，但长期平均不超过 窗口/上限（如 660/75 ≈ 8.8s）
+    eff_interval = max(
+        NORMAL_DELAY,
+        limiter.steady_interval(
+            f"https://www.instagram.com/api/v1/friendships/{user_id}/followers/"
+        ),
+    )
+    print(f"   稳态约 {eff_interval:.1f} 秒/页")
     print(f"{'='*60}\n")
 
     session = loader.context._session
@@ -330,7 +338,7 @@ def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429,
         bar_len = 30
         filled = int(bar_len * pct / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        eta_seconds = (TOTAL_FOLLOWERS - state["count"]) / BATCH_SIZE * NORMAL_DELAY
+        eta_seconds = (TOTAL_FOLLOWERS - state["count"]) / BATCH_SIZE * eff_interval
         eta_str = f"{eta_seconds/60:.0f}分" if eta_seconds < 3600 else f"{eta_seconds/3600:.1f}小时"
 
         print(
