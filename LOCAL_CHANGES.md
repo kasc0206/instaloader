@@ -9,13 +9,13 @@
 
 核心库 4 个文件共 **686 行新增 / 62 行删除**：
 
-| 文件 | 新增 | 删除 | 冲突风险 |
-|---|---:|---:|---|
-| `instaloader/structures.py` | 550 | 14 | 中 |
-| `instaloader/instaloader.py` | 132 | 46 | 中高 |
-| `instaloader/__init__.py` | 2 | 2 | 低（但**必然**冲突） |
-| `instaloader/instaloadercontext.py` | 2 | 0 | 极低 |
-| **合计** | **686** | **62** | — |
+| 文件                                |    新增 |   删除 | 冲突风险             |
+| ----------------------------------- | ------: | -----: | -------------------- |
+| `instaloader/structures.py`         |     550 |     14 | 中                   |
+| `instaloader/instaloader.py`        |     132 |     46 | 中高                 |
+| `instaloader/__init__.py`           |       2 |      2 | 低（但**必然**冲突） |
+| `instaloader/instaloadercontext.py` |       2 |      0 | 极低                 |
+| **合计**                            | **686** | **62** | —                    |
 
 **关键结论：686 行（92%）是纯新增代码块，`git` 三方合并能自动处理；
 真正会与上游「争抢同一行」的只有 62 行，集中在下面 10 处。**
@@ -25,18 +25,18 @@
 
 ## 二、高危改动清单（rebase 时重点看这里）
 
-| # | 位置 | 改动内容 | 冲突时的解法 |
-|---|---|---|---|
-| 1 | `__init__.py` 版本号 | `'4.15.3'` → `'4.15.3+local1'` | 用**上游新版本号** + 保留 `+local1` 后缀 |
-| 2 | `__init__.py` 导出 | `from .exceptions import *` 补 `# noqa: F401, F403` | 保留本地 `# noqa` 注释 |
-| 3 | `InstaloaderContext._get_json` | 新增 `403 → QueryReturnedBadRequestException`（2 行） | 直接保留本地 |
-| 4 | `Instaloader.download_tagged` | 上游实现整体包进 `try/except`，优先走 Web API | **保留外层 try 包装，把 `except` 分支内容换成上游新版** |
-| 5 | `Instaloader.download_reels` | 同上 | 同上 |
-| 6 | `Instaloader.download_igtv` | 同上 | 同上 |
-| 7 | `Instaloader.download_profile` | 新增 `_feed_posts_wrapper` 包装 feed API | 同上 |
-| 8 | `Instaloader.interactive_login` | 登录流程微调 | 上游若已改则**用上游** |
-| 9 | `Post._obtain_metadata` | 上游 GraphQL 查询包进 `except`，优先 Web API | 同 #4 |
-| 10 | `load_structure` | 1 行调整 | 上游若已改则**用上游** |
+| #   | 位置                            | 改动内容                                              | 冲突时的解法                                            |
+| --- | ------------------------------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| 1   | `__init__.py` 版本号            | `'4.15.3'` → `'4.15.3+local1'`                        | 用**上游新版本号** + 保留 `+local1` 后缀                |
+| 2   | `__init__.py` 导出              | `from .exceptions import *` 补 `# noqa: F401, F403`   | 保留本地 `# noqa` 注释                                  |
+| 3   | `InstaloaderContext._get_json`  | 新增 `403 → QueryReturnedBadRequestException`（2 行） | 直接保留本地                                            |
+| 4   | `Instaloader.download_tagged`   | 上游实现整体包进 `try/except`，优先走 Web API         | **保留外层 try 包装，把 `except` 分支内容换成上游新版** |
+| 5   | `Instaloader.download_reels`    | 同上                                                  | 同上                                                    |
+| 6   | `Instaloader.download_igtv`     | 同上                                                  | 同上                                                    |
+| 7   | `Instaloader.download_profile`  | 新增 `_feed_posts_wrapper` 包装 feed API              | 同上                                                    |
+| 8   | `Instaloader.interactive_login` | 登录流程微调                                          | 上游若已改则**用上游**                                  |
+| 9   | `Post._obtain_metadata`         | 上游 GraphQL 查询包进 `except`，优先 Web API          | 同 #4                                                   |
+| 10  | `load_structure`                | 1 行调整                                              | 上游若已改则**用上游**                                  |
 
 > 通用原则（沿用既有约定）：
 > 上游已实现同名能力 → **用上游**，删掉本地重复实现；
@@ -93,14 +93,14 @@ git push origin --tags
 
 ## 五、防护措施现状
 
-| 措施 | 状态 |
-|---|---|
-| `git rerere`（冲突解法自动记忆/复用） | ✅ 已启用（`rerere.enabled=true`、`rerere.autoupdate=true`） |
-| `.vscode/settings.json` 关闭 Python 保存时格式化 | ✅ 已配置（防 Ruff 重排上游代码） |
-| 备份分支 | ✅ `backup-pre-upgrade-20260917` |
-| 备份标签 | ✅ `local-4.15.2/3/4`、`backup-20260917` |
-| `upstream` 推送保护 | ✅ push URL 设为 `DISABLE_PUSH_TO_UPSTREAM` |
-| `# [LOCAL]` 代码标记 | ⏳ 约定见下，尚未在代码中标注 |
+| 措施                                             | 状态                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------ |
+| `git rerere`（冲突解法自动记忆/复用）            | ✅ 已启用（`rerere.enabled=true`、`rerere.autoupdate=true`） |
+| `.vscode/settings.json` 关闭 Python 保存时格式化 | ✅ 已配置（防 Ruff 重排上游代码）                            |
+| 备份分支                                         | ✅ `backup-pre-upgrade-20260917`                             |
+| 备份标签                                         | ✅ `local-4.15.2/3/4`、`backup-20260917`                     |
+| `upstream` 推送保护                              | ✅ push URL 设为 `DISABLE_PUSH_TO_UPSTREAM`                  |
+| `# [LOCAL]` 代码标记                             | ⏳ 约定见下，尚未在代码中标注                                |
 
 ## 六、`# [LOCAL]` 标记约定（可选，建议采用）
 
