@@ -6,7 +6,18 @@ from contextlib import suppress
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 from unicodedata import normalize
 
 from . import __version__
@@ -1139,18 +1150,53 @@ class Profile:
         # anonymously and when logged in and returns the complete profile node
         # (including the first page of posts). The GraphQL fbsearch query previously
         # used here started responding with HTTP 400.
+        web_info_unavailable = False
         try:
             data = context.get_json(
                 "api/v1/users/web_profile_info/", params={"username": username.lower()}
             ).get("data")
         except QueryReturnedNotFoundException:
             data = None
+        except (TooManyRequestsException, QueryReturnedForbiddenException,
+                QueryReturnedBadRequestException, AbortDownloadException) as err:
+            # Instagram 的限流是按端点计的：web_profile_info 常返回 429，
+            # 有时返回 400 feedback_required；而 web/search/topsearch/ 与
+            # GraphQL profile 查询通常仍可用。
+            context.log("web_profile_info unavailable ({}), falling back to "
+                        "topsearch + GraphQL profile query".format(type(err).__name__))
+            data = None
+            web_info_unavailable = True
+
         if data and data.get("user"):
             profile = cls(context, data["user"])
             profile._has_full_metadata = True
             return profile
 
+        if web_info_unavailable:
+            user_id = cls._resolve_user_id_via_search(context, username)
+            if user_id is not None:
+                profile = cls(context, {"id": str(user_id), "username": username.lower()})
+                # 已登录时会走 GraphQL profile 查询补全元数据
+                profile._obtain_metadata()
+                return profile
+
         raise ProfileNotExistsException("Profile {} does not exist.".format(username))
+
+    @staticmethod
+    def _resolve_user_id_via_search(context: 'InstaloaderContext',
+                                    username: str) -> Optional[int]:
+        """用 ``web/search/topsearch/`` 端点把用户名解析为 user_id。
+
+        作为 ``web_profile_info`` 被限流（HTTP 429）时的替代路径：
+        该搜索端点属于不同的限流桶，通常仍然可用。
+        """
+        try:
+            for profile in TopSearchResults(context, username).get_profiles():
+                if profile.username == username.lower():
+                    return profile.userid
+        except Exception:
+            return None
+        return None
 
     @classmethod
     def from_id(cls, context: InstaloaderContext, profile_id: int):
@@ -1565,8 +1611,9 @@ class Profile:
 
         :rtype: Iterator[Post]
         """
-        import requests
         import time
+
+        import requests
 
         session = self._context._session
         user_id = self.userid
@@ -1611,21 +1658,25 @@ class Profile:
             if resp.status_code == 429:
                 retries += 1
                 if retries > 3:
-                    self._context.error("Rate limited too many times, stopping.")
-                    break
+                    yield from self._fallback_to_graphql(fetched_count)
+                    return
                 wait = 30 * retries
                 self._context.error(f"Rate limited, waiting {wait}s...")
                 time.sleep(wait)
                 continue
-            if resp.status_code == 401:
-                self._context.error("Session expired, Feed API returned 401.")
-                break
+            if resp.status_code in (401, 403):
+                yield from self._fallback_to_graphql(fetched_count)
+                return
             if resp.status_code != 200:
-                self._context.error(f"Failed to fetch feed: {resp.status_code}")
-                break
+                yield from self._fallback_to_graphql(fetched_count)
+                return
 
             retries = 0
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                yield from self._fallback_to_graphql(fetched_count)
+                return
             items = data.get("items", [])
             if not items:
                 break
@@ -1644,14 +1695,29 @@ class Profile:
 
         self._context.log(f"\n✅ 通过 Feed API 获取到 {fetched_count} 个帖子")
 
+    def _fallback_to_graphql(self, already_yielded: int = 0) -> Iterator[Post]:
+        """Feed API 不可用时回退到标准 GraphQL 路径。
+
+        注意：本方法是生成器，必须在 ``get_posts_via_feed_api()`` 内部
+        ``yield from`` 调用，才能在迭代中真正生效。
+        已产出部分结果时不再回退，以免重复。
+        """
+        if already_yielded:
+            self._context.error(
+                "Feed API 中断（已获取 {} 条），不再回退以避免重复。".format(already_yielded))
+            return
+        self._context.log("Feed API unavailable, falling back to GraphQL get_posts().")
+        yield from self.get_posts()
+
     def get_tagged_posts_via_api(self) -> Iterator[Post]:
         """通过 Instagram Web API 获取标记用户的帖子。
         替代被限制的 graphql/query 方式。需要登录。
 
         :rtype: Iterator[Post]
         """
-        import requests
         import time
+
+        import requests
 
         session = self._context._session
         user_id = self.userid
@@ -1725,8 +1791,9 @@ class Profile:
 
         :rtype: Iterator[Post]
         """
-        import requests
         import time
+
+        import requests
 
         session = self._context._session
         user_id = str(self.userid)
@@ -1805,8 +1872,9 @@ class Profile:
 
         :rtype: Iterator[Post]
         """
-        import requests
         import time
+
+        import requests
 
         session = self._context._session
         user_id = self.userid
@@ -2851,7 +2919,7 @@ def load_structure(context: InstaloaderContext, json_structure: dict) -> JsonExp
         elif node_type == "Hashtag":
             return Hashtag(context, json_structure['node'])
         elif node_type == "FrozenNodeIterator":
-            if not 'first_node' in json_structure['node']:
+            if 'first_node' not in json_structure['node']:
                 json_structure['node']['first_node'] = None
             return FrozenNodeIterator(**json_structure['node'])
     elif 'shortcode' in json_structure:
