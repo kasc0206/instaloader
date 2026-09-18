@@ -208,28 +208,40 @@
 
 实测（同一 IP、同一 cookies，2026-09-18）：
 
-| 端点 | 用途 | 状态 |
-|---|---|---|
-| `api/v1/friendships/{id}/followers/` | 粉丝列表 | ✅ 200 可用 |
-| `api/v1/friendships/{id}/following/` | 关注列表 | ✅ 200 可用 |
-| `api/v1/users/web_profile_info/` | 用户资料 | ❌ 429 被限流 |
-| `api/v1/feed/user/{id}/` | 帖子列表 | ❌ 302 |
-| `i.instagram.com/api/v1/users/{id}/info/` | App 资料 | ❌ fail（缺设备签名） |
+| 端点                                             | 用途                | 状态                        |
+| ------------------------------------------------ | ------------------- | --------------------------- |
+| `api/v1/friendships/{id}/followers/`             | 粉丝列表            | ✅ 200 可用                 |
+| `api/v1/friendships/{id}/following/`             | 关注列表            | ✅ 200 可用                 |
+| `api/v1/users/edit/`                             | `test_login()`      | ✅ 200 可用                 |
+| `web/search/topsearch/`                          | 用户名 → user_id    | ✅ 200 可用                 |
+| `graphql/query?doc_id=27937681195819736`         | 用户资料（GraphQL） | ✅ 200 可用                 |
+| `api/v1/users/web_profile_info/`                 | 用户资料            | ❌ 429 / 400 feedback_required |
+| `api/v1/feed/user/{id}/`                         | 帖子列表（Feed API）| ❌ 302 / 400                |
+| `i.instagram.com/api/v1/users/{id}/info/`        | App 资料            | ❌ fail（缺设备签名）       |
 
-所以**粉丝/关注采集能照常跑**，只有依赖 `web_profile_info` 的功能
-（`Profile.from_username()` → 进而 `ins_downloader.py` 全流程）会失败。
+**代码已内置自动回退，一般不需要手动干预**：
+
+1. **`Profile.from_username()`**：`web_profile_info` 返回 429/403/400 时，
+   自动改用 `web/search/topsearch/` 解析 user_id，再走 GraphQL profile 查询
+   补全元数据（见 `Profile._resolve_user_id_via_search()`）
+2. **`get_posts_via_feed_api()`**：Feed API 失效时自动回退到标准
+   `get_posts()`（GraphQL），见 `_fallback_to_graphql()`
+   —— 修掉了此前"生成器静默结束 → 下载 0 个帖子却显示成功"的坑
+
+因此限流期间增量更新与粉丝采集都能正常跑：
+
+```bash
+# 单用户增量更新（无需 --skip-check，test_login 走的是未被限流的端点）
+python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --no-wait-429
+
+# 粉丝采集（用 --user-id 或本地 *_analysis.json 解析 user_id，完全不碰 web_profile_info）
+python3 fetch_all_followers.py --max-pages 200
+```
 
 **为什么浏览器"能正常访问"但脚本被限流**：浏览网页走 HTML 与另外的 API，
 和被限流的 `web_profile_info` 不在同一个限流桶里。
-
-**不要用 `Profile.from_username()` 做前置步骤**。`fetch_all_followers.py` 已改为
-优先从 `--user-id` 或本地 `*_analysis.json` 读取 user_id，无需调用该端点：
-
-```bash
-# 粉丝采集（绕开 web_profile_info，限流期间可正常跑）
-python3 fetch_all_followers.py --skip-check --max-pages 200
-python3 fetch_all_followers.py --skip-check --user-id 144511281
-```
+（资料页 HTML 里嵌的 `PolarisViewer` 数据块是**当前登录者本人**的信息，不是被查看用户的，
+所以不能拿来替代。）
 
 **判断方法**（不依赖 instaloader，几秒出结果）：
 
@@ -240,16 +252,8 @@ python3 -c "import requests; print(requests.get('https://www.instagram.com/api/v
 **为什么以前会"卡住"**：instaloader 的 `RateController.handle_429()` 会
 `sleep(waittime)` 等待（可能数十分钟），期间只打印一行提示。若再用
 `| tail` 之类的管道过滤输出，缓冲会让等待期完全不可见。
-
-**限流期间可用的运行参数**：
-
-```bash
-# 快速失败而不是干等（但 Profile 解析仍会被 429 挡住）
-python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
-
-# 粉丝采集：跳过校验 + 连续被限流即退出
-python3 fetch_all_followers.py --skip-check --max-consec-429 3
-```
+`--no-wait-429`（`ins_downloader.py`）与 `--max-consec-429 N`（`fetch_all_followers.py`）
+可让它立即失败。
 
 **解除限流的手段**：等待（通常数十分钟到数小时）或更换出口 IP（切换网络最有效）。
 被限流期间不要反复重试，会延长封锁时间。
