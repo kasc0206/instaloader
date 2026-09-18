@@ -43,6 +43,28 @@
       "isBackground": true,
       "problemMatcher": [],
       "detail": "自动循环：每隔 5~8 分钟获取 25 个，直到全部完成，后台运行"
+    },
+    {
+      "label": "📥 下载: 全部用户补齐历史缺口（推荐）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 -u ins_downloader.py --load-cookies edge --update-all --fill-gaps --no-wait-429",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "逐帖比对本地日期戳，只下载缺失的、不提前停止。全量跑约 90 分钟"
+    },
+    {
+      "label": "📥 下载: 全部用户快速增量（有历史缺口时慎用）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 -u ins_downloader.py --load-cookies edge --update-all --fast --no-wait-429",
+      "problemMatcher": [],
+      "detail": "fast_update：遇第一个已存在的帖子即停止；列表中间有缺口时永远补不上"
+    },
+    {
+      "label": "✅ 核验: 下载完整性（每用户最近 30 帖）",
+      "type": "shell",
+      "command": "cd ${workspaceFolder} && python3 -u verify_downloads.py --limit 30",
+      "problemMatcher": [],
+      "detail": "对比远端帖子列表与本地文件；退出码 0=完整，1=有缺失"
     }
   ]
 }

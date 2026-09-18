@@ -25,10 +25,13 @@
 ├── analyze_kasc0206.py           # 批量用户详情采集
 ├── analyze_mutual.py             # 相互关注用户详情
 ├── ins_downloader.py             # 通用下载工具
+├── verify_downloads.py           # 下载完整性核验（远端帖子 vs 本地文件）
 ├── download_test/                # 已下载的 Instagram 用户资料
 │   ├── chrissylii_/
 │   ├── pikapikammmmm/
-│   └── ...（共 ~16 个用户）
+│   ├── :tagged/                  # （位于各用户目录内）被 @ 的内容
+│   ├── _gone_accounts.txt        # 已确认不存在的账号（--update-all 自动跳过）
+│   └── ...（共 24 个用户目录）
 ├── docs/                         # Sphinx 文档
 ├── deploy/                       # 部署配置
 ├── test/                         # 单元测试（联网集成测试，见下）
@@ -103,7 +106,25 @@
 
 - 支持浏览器 Cookie 登录或用户名密码
 - 支持下载 Profile、Story、Highlight、Reels、Hashtag 等
-- 支持快速增量更新（`--fast-update`）
+- **增量更新三档模式**（理解区别很重要）：
+
+  | 参数 | 行为 | 适用场景 |
+  |---|---|---|
+  | `--fast` | 遇第一个已存在的帖子就**停止** | 内容连续、无历史缺口 |
+  | `--fill-gaps` | 逐帖比对本地日期戳，只下缺失的，**不提前停止** | **有历史缺口时唯一可靠的方式** |
+  | 都不加 | 全量遍历（已存在的自动跳过） | 首次下载 |
+
+- ⚠️ **`fast_update` 不会自愈**：它假设「帖子按时间倒序，遇已存在则其后必已下载」。
+  只要列表中间有缺口（例如首次下载被限流中断），缺口**永远不会被补上** ——
+  表现为核验显示「最新无缺失」，实际历史大量空白。
+  实测 `--fill-gaps` 一次性补回 **9078 个文件**（`alicasmd` +4726、`xxcira` +1909、`____ylei` +971）。
+- `--update-all`：扫描输出目录下所有用户目录逐个增量更新。默认只下帖子
+  （跳过 Stories/Highlights/Tagged/Reels/IGTV —— 这些依赖的接口易被限流），
+  且不强制下载头像（头像走 `i.instagram.com`，该端点当前返回 `status: fail`，
+  每用户会白重试 3 次）
+- **死账号自动跳过**：用户已删除/改名时（`ProfileNotExistsException`）自动记入
+  `<输出目录>/_gone_accounts.txt`（每行 `用户名<TAB>日期[<TAB>原因]`），
+  后续 `--update-all` 直接跳过、不再浪费请求。名单可手工编辑
 - 批量下载：`--batch-file <列表文件>` / `--batch-resume`（断点保存在 `<输出目录>/.batch_state.json`，
   结构为 `all` + `index` + `completed`，失败用户不记入断点）
 - 限流防护：`--skip-check`（跳过 `test_login` 校验）、
@@ -114,10 +135,40 @@
   # 单用户增量更新（限流时快速失败，不卡住）
   python3 ins_downloader.py --load-cookies edge --url <用户名> --fast --skip-check --no-wait-429
 
+  # 全部用户：既更新最新，也补齐历史缺口（最常用）
+  python3 ins_downloader.py --load-cookies edge --update-all --fill-gaps --no-wait-429
+
   # 批量下载（可中断后继续）
   python3 ins_downloader.py --load-cookies edge --batch-file users.txt --skip-check
   python3 ins_downloader.py --load-cookies edge --batch-resume --skip-check
   ```
+
+### `verify_downloads.py` — 下载完整性核验
+
+把**远端帖子列表**与**本地文件**逐个比对（按日期戳匹配文件名），找出缺失的帖子。
+
+⚠️ **不要用文件 mtime 判断是否有更新**：instaloader 把媒体文件（`.jpg`/`.mp4`）的
+mtime 设成**帖子发布时间**，只有 `.json.xz` 的 mtime 才是真实写入时间。
+按 mtime 统计会严重低估，曾导致误判「已是最新」。
+
+```bash
+python3 verify_downloads.py                      # 核验 download_test 下所有用户
+python3 verify_downloads.py --limit 30           # 每个用户只比对最近 30 个帖子
+python3 verify_downloads.py llyrsnsx dodorisyu_  # 只核验指定用户
+```
+
+退出码：`0` = 全部完整；`1` = 存在缺失（可挂到定时任务）。
+
+⚠️ **抽样核验有盲区**：`--limit 30` 只覆盖最近的帖子。若缺口集中在更早的历史，
+核验会误报「无缺失」（曾因此把真实缺口 9000+ 文件误报为「仅 133 个」）。
+要确认历史完整性，用「远端帖子数 vs 本地不同日期戳数」做全量对比，
+或直接跑一遍 `--fill-gaps`（它遍历全部帖子）。
+
+### 数据目录中的 `:tagged` 子目录
+
+若曾用 `--tagged` 下载过被 @ 的内容，instaloader 会放在 `<用户目录>/:tagged/`。
+统计文件数时注意区分，否则会与主目录数据混淆（当前 8 个用户共 1219 个 tagged 文件）。
+`--update-all` 不下载 tagged，因此这些内容不随增量更新变化。
 
 ## 数据文件格式
 
@@ -332,6 +383,22 @@ python3 analyze_kasc0206.py --resume --skip-check
 # 自动循环采集
 python3 analyze_kasc0206.py --auto --skip-check
 ```
+
+### 1.5 下载内容增量更新
+
+```bash
+# 全部用户：更新最新 + 补齐历史缺口（推荐，一次搞定）
+python3 ins_downloader.py --load-cookies edge --update-all --fill-gaps --no-wait-429
+
+# 只想快速看有没有新帖（有历史缺口时慎用，见上文 ins_downloader.py 说明）
+python3 ins_downloader.py --load-cookies edge --update-all --fast --no-wait-429
+
+# 更新完核验完整性
+python3 verify_downloads.py --limit 30
+```
+
+⚠️ 长时间运行请**重定向到日志文件**并后台执行，不要用 `| tail` ——
+管道缓冲会让进程看起来像卡死，且 `head` 会因 SIGPIPE 直接杀掉 Python 进程。
 
 ### 2. 测试修改
 
