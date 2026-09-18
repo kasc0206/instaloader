@@ -26,6 +26,7 @@
 ├── analyze_mutual.py             # 相互关注用户详情
 ├── ins_downloader.py             # 通用下载工具
 ├── verify_downloads.py           # 下载完整性核验（远端帖子 vs 本地文件）
+├── LOCAL_CHANGES.md              # 本地改动清单（与上游 rebase 时对照使用）
 ├── download_test/                # 已下载的 Instagram 用户资料
 │   ├── chrissylii_/
 │   ├── pikapikammmmm/
@@ -237,14 +238,25 @@ python3 verify_downloads.py llyrsnsx dodorisyu_  # 只核验指定用户
   否则会与上游同名 tag 冲突，导致 `git fetch` 报 `would clobber existing tag`
 - **上游标签**：`v4.15` / `v4.15a1` / `v4.15.1` / `v4.15.2` / `v4.15.3` 应与上游保持一致
 - **备份**：升级前留有 `backup-pre-upgrade-20260917` 分支与 `backup-20260917` 标签
-- **与上游同步流程**：
-  1. 先确认本地没有脏标签（见上）
+- **与上游同步流程**（完整版见 `LOCAL_CHANGES.md`）：
+  1. 先打备份标签：`git tag pre-sync-$(date +%Y%m%d)`
   2. `git fetch upstream --tags --prune`
-  3. `git rebase upstream/master`，预期冲突集中在
-     `instaloader/__init__.py`（版本号）、`instaloadercontext.py`、`structures.py`
-  4. 冲突取舍原则：**上游已实现同名能力时采用上游**（上游已自带 `web_profile_info` 方案），
-     仅保留上游没有的本地增强（如 `Post._obtain_metadata` 的 Web API 优先路径）
-  5. 完成后 `git push origin master --tags`
+  3. `git rebase upstream/master`
+     —— **`git rerere` 已启用**，已记住的冲突解法会自动套用
+  4. 预期冲突位置（详见 `LOCAL_CHANGES.md` 第二节）：`__init__.py`（版本号，**必然**冲突）、
+     `structures.py` 的 `Post._obtain_metadata`、`instaloader.py` 的
+     `download_tagged` / `download_reels` / `download_igtv` / `download_profile`
+     与 `interactive_login`
+  5. 冲突取舍原则：**上游已实现同名能力时采用上游**（上游已自带 `web_profile_info` 方案），
+     仅保留上游没有的本地增强。本地 6 处 `try/except` 包装的解法是机械的：
+     **保留外层 `try`，把 `except` 分支里的内容替换成上游新版**
+  6. 验证：`python3 -m py_compile instaloader/structures.py`，
+     再跑冒烟测试 `python3 verify_downloads.py <用户> --limit 10`
+  7. 完成后 `git push --force-with-lease origin master && git push origin --tags`
+- **⚠️ 不要等上游发版才同步**：每月或每两周 `fetch + rebase` 一次，
+  上游每次只前进几个提交，冲突规模极小；攒久了才会堆积成大冲突
+- **本地改动规模（2026-09-18 实测）**：核心库 686 行新增 / 62 行删除，
+  其中 92% 是纯新增（不会冲突），真正高危只有 10 处
 
 > ⚠️ 保存 `.py` 文件前注意：用户级设置开启了 formatOnSave，Ruff 会把上游风格代码全量重排。
 > 本项目已用 `.vscode/settings.json` 关闭 Python 的保存时自动格式化，不要删掉它。
