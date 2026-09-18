@@ -5,11 +5,17 @@
 - 保守的速率控制
 - 可长时间运行
 """
-import os, sys, time, json, signal
+import argparse
+import json
+import os
+import signal
+import sys
+import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
+
 import instaloader
 from instaloader import Profile
 
@@ -21,7 +27,8 @@ TOTAL_FOLLOWERS = 543262  # 已知总数
 BATCH_SIZE = 50
 SAVE_INTERVAL = 10  # 每10页保存一次
 RATE_LIMIT_WAIT = 60  # 遇到429的基础等待秒数
-NORMAL_DELAY = 2.0   # 正常请求间延迟(秒)
+NORMAL_DELAY = 2.0  # 正常请求间延迟(秒)
+MAX_CONSEC_429 = 5  # 连续 429 达到此次数就保存退出，避免无限等待（进度已落盘）
 
 # 全局变量用于信号处理
 stop_flag = False
@@ -51,7 +58,7 @@ def load_state():
         state["page"] = meta.get("page", 0)
         print(f"📂 找到断点: 已获取 {state['count']} 个, 进度 {state['count'] / TOTAL_FOLLOWERS * 100:.2f}%")
     else:
-        print(f"📂 无断点，从头开始")
+        print("📂 无断点，从头开始")
     return state
 
 
@@ -143,7 +150,7 @@ def parse_user(item):
     }
 
 
-def main():
+def main(skip_check: bool = False, max_consec_429: int = MAX_CONSEC_429):
     loader = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False)
 
     # 登录
@@ -157,12 +164,19 @@ def main():
         print("❌ 未找到 cookies")
         sys.exit(1)
     loader.context.update_cookies(cookies)
-    login_name = loader.test_login()
-    if not login_name:
-        print("❌ 未检测到登录状态")
-        sys.exit(1)
-    loader.context.username = login_name
-    print(f"✅ 已登录为 {login_name}")
+    if skip_check:
+        # 限流时 test_login() 必定失败，直接信任 cookies
+        login_name = cookies.get("ds_user") or "unknown"
+        loader.context.username = login_name
+        print(f"⚠️  已跳过登录验证（--skip-check），用户名标记为 {login_name}")
+    else:
+        login_name = loader.test_login()
+        if not login_name:
+            print("❌ 未检测到登录状态")
+            print("   若正被限流（429），可加 --skip-check 跳过该校验")
+            sys.exit(1)
+        loader.context.username = login_name
+        print(f"✅ 已登录为 {login_name}")
 
     profile = Profile.from_username(loader.context, USERNAME)
     user_id = profile.userid
@@ -192,6 +206,10 @@ def main():
         if error:
             consec_errors += 1
             if error == "rate_limited":
+                if consec_errors > max_consec_429:
+                    print(f"\n  ⛔ [{page}] 连续 {consec_errors} 次被限流，停止本轮"
+                          f"（进度已保存，稍后重跑即可继续）")
+                    break
                 wait = RATE_LIMIT_WAIT * min(consec_errors, 5)
                 print(f"\n  ⏳ [{page}] 频率限制! 等待 {wait}s (第{consec_errors}次)... ", end="", flush=True)
                 for s in range(wait):
@@ -299,5 +317,15 @@ def main():
     print(f"   用户名列表: {name_file}")
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="极端稳健的 Instagram 粉丝采集器")
+    parser.add_argument("--skip-check", action="store_true",
+                        help="跳过 test_login() 登录校验（限流 429 时使用）")
+    parser.add_argument("--max-consec-429", type=int, default=MAX_CONSEC_429,
+                        help=f"连续 429 达到此次数就保存退出（默认 {MAX_CONSEC_429}）")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    _args = _parse_args()
+    main(skip_check=_args.skip_check, max_consec_429=_args.max_consec_429)
