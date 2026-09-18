@@ -173,6 +173,18 @@ def _optional_normalize(string: Optional[str]) -> Optional[str]:
         return None
 
 
+def _wait_before_web_api_call(context: 'InstaloaderContext') -> None:
+    """发送 fork 新增的 Web API 请求前遵守上游限速。
+
+    这些方法直接使用 ``context._session``，不经过
+    :meth:`InstaloaderContext.get_json`，因此不会自动受限；
+    此处显式调用 ``RateController``，按上游分类归入 ``'other'``
+    （75 次 / 660 秒，约 8.8 秒/次）。
+    """
+    # pylint:disable=protected-access
+    context._rate_controller.wait_before_query("other")
+
+
 def _convert_api_item_to_graphql(item: dict) -> dict:
     """
     将 Instagram Web API（Feed API / Media Info API）返回的数据项
@@ -558,6 +570,7 @@ class Post:
             "Referer": "https://www.instagram.com/",
         }
 
+        _wait_before_web_api_call(self._context)
         resp = session.get(
             "https://www.instagram.com/api/v1/media/{}/info/".format(self.mediaid),
             headers=headers,
@@ -1649,6 +1662,7 @@ class Profile:
             if max_id:
                 params["max_id"] = max_id
 
+            _wait_before_web_api_call(self._context)
             resp = session.get(
                 f"https://www.instagram.com/api/v1/feed/user/{user_id}/",
                 params=params,
@@ -1747,6 +1761,7 @@ class Profile:
             if max_id:
                 params["max_id"] = max_id
 
+            _wait_before_web_api_call(self._context)
             resp = session.get(
                 f"https://www.instagram.com/api/v1/usertags/{user_id}/feed/",
                 params=params,
@@ -1904,6 +1919,7 @@ class Profile:
             if max_id:
                 params["max_id"] = max_id
 
+            _wait_before_web_api_call(self._context)
             resp = session.get(
                 f"https://www.instagram.com/api/v1/igtv/feed/user/{user_id}/",
                 params=params,
